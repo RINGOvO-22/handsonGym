@@ -1,6 +1,7 @@
 from typing import Optional
 import numpy as np
 import gymnasium as gym
+from gymnasium.wrappers import FlattenObservation
 
 
 class GridWorldEnv(gym.Env):
@@ -85,3 +86,14 @@ gym.register(
     id="GridWorld-v0",
     entry_point="handsonGym_customEnv:GridWorldEnv",
 )
+
+env = gym.make('GridWorld-v0', size=5)
+print(f"Original observation space: {env.observation_space}")
+# Flatten the observation space
+wrapped_env = FlattenObservation(env)
+print(f"Flattened observation space: {wrapped_env.observation_space}")
+# Reset the environment
+observation, info = wrapped_env.reset()
+print(f"Initial observation: {observation}")
+
+# analysis: e.g., {'agent': [4, 1], 'target': [2, 4]} → [4, 1, 2, 4]
