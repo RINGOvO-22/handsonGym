@@ -2,6 +2,7 @@ from typing import Optional
 import numpy as np
 import gymnasium as gym
 from gymnasium.wrappers import FlattenObservation
+import pandas as pd
 
 
 class creditScoring_v1(gym.Env):
@@ -29,6 +30,31 @@ class creditScoring_v1(gym.Env):
         # Initializa the environment
         self.state = None
 
+    def load_data(self):
+        # todo: shuffle the data
+        
+        path = "data/ProcessedData/"
+
+        train_data = pd.read_csv(path + "cs-training-processed.csv")
+        train_data["NumberOfDependents"] = train_data["NumberOfDependents"].astype(int)
+        train_data["MonthlyIncome"] = train_data["MonthlyIncome"].astype(int)
+        # extract the target column and the features
+        train_x = train_data.drop(columns=['SeriousDlqin2yrs']).to_numpy()
+        train_y = train_data['SeriousDlqin2yrs'].to_numpy()  # extract the target column
+
+        test_data = pd.read_csv(path + "cs-test-processed.csv")
+        test_prob = pd.read_csv(path + "sampleEntry.csv")
+        test_data["NumberOfDependents"] = test_data["NumberOfDependents"].astype(int)
+        test_data["MonthlyIncome"] = test_data["MonthlyIncome"].astype(int)
+        # extract the target column and the features
+        test_x = test_data.drop(columns=['SeriousDlqin2yrs']).to_numpy()
+        test_y = test_prob.drop(columns=['Id']).to_numpy()  # drop the ID column
+        test_y = test_y.ravel() # flatten the target to 1D array
+
+        print(f"train_x shape: {train_x.shape}, dtype: {train_x.dtype}")
+        print(f"train_y shape: {train_y.shape}, dtype: {train_y.dtype}")
+        print(f"test_x shape: {test_x.shape}, dtype: {test_x.dtype}")
+        print(f"test_y shape: {test_y.shape}, dtype: {test_y.dtype}")
 
     def strategic_response(self, real_feature):
         """
@@ -37,17 +63,12 @@ class creditScoring_v1(gym.Env):
         """
         return real_feature
     
-    # 在 .reset() 和 .step() 方法中调用, 返回observation
+    # called in .reset() & .step(
     def _get_obs(self):
-        return {"agent": self._agent_location, "target": self._target_location}
+        return
     
-    #返回 agent 和 target 的曼哈顿距离
     def _get_info(self):
-        return {
-            "distance": np.linalg.norm(
-                self._agent_location - self._target_location, ord=1
-            )
-        }
+        return
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         # We need the following line to seed self.np_random
@@ -86,18 +107,18 @@ class creditScoring_v1(gym.Env):
         return observation, reward, terminated, truncated, info
 
 # Register the environment after the class definition
-gym.register(
-    id="GridWorld-v0",
-    entry_point="handsonGym_customEnv:GridWorldEnv",
-)
+# gym.register(
+#     id="GridWorld-v0",
+#     entry_point="handsonGym_customEnv:GridWorldEnv",
+# )
 
-env = gym.make('GridWorld-v0', size=5)
-print(f"Original observation space: {env.observation_space}")
-# Flatten the observation space
-wrapped_env = FlattenObservation(env)
-print(f"Flattened observation space: {wrapped_env.observation_space}")
-# Reset the environment
-observation, info = wrapped_env.reset()
-print(f"Initial observation: {observation}")
+# env = gym.make('GridWorld-v0', size=5)
+# print(f"Original observation space: {env.observation_space}")
+# # Flatten the observation space
+# wrapped_env = FlattenObservation(env)
+# print(f"Flattened observation space: {wrapped_env.observation_space}")
+# # Reset the environment
+# observation, info = wrapped_env.reset()
+# print(f"Initial observation: {observation}")
 
-# analysis: e.g., {'agent': [4, 1], 'target': [2, 4]} → [4, 1, 2, 4]
+

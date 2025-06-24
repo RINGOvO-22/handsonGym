@@ -38,7 +38,7 @@ trainData.to_csv("data/ProcessedData/cs-training-processed.csv", index=False)
 testData = pd.read_csv(datapath + 'cs-test.csv')
 testData = testData.drop(columns=['Unnamed: 0'])  # 删除第一列
 # 填充缺失值
-
+testData = fill_na_with_default(testData)
 # 显示每列的最大最小值
 print("Max\n", testData.max())
 print("Min\n", testData.min())
