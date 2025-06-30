@@ -7,22 +7,18 @@ from model.principals import Principal_v1
 
 def main():
     # hyperparameters
-    # 信息：当前的超参数设置旨在快速训练一个合适的代理。如果想收敛到最优策略，请尝试将学习率提高n_episodes10 倍并降低学习率（例如降低至 0.001）。
     learning_rate = 0.001
-    n_episodes = 100000
-    start_epsilon = 1.0
-    epsilon_decay = start_epsilon / (n_episodes / 2)  # reduce the exploration over time
-    final_epsilon = 0.1
+    n_episodes = 10
 
     env = gym.make("creditScoring_v1", mode='train')
     env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=n_episodes)
 
     agent = Principal_v1(
         env=env,
-        learning_rate=learning_rate,
-        initial_epsilon=start_epsilon,
-        epsilon_decay=epsilon_decay,
-        final_epsilon=final_epsilon,
+        learning_rate_actor=learning_rate,
+        learning_rate_critic=learning_rate,
+        learning_rate_cost=learning_rate,
+        init_cost_pram=2.0,
     )
 
     for episode in tqdm(range(n_episodes)):
@@ -34,16 +30,13 @@ def main():
             action = agent.get_action(obs)
             next_obs, reward, terminated, truncated, info = env.step(action)
 
-            # update the agent:
-            # q value is updated; training error is recorded
-            agent.update(obs, action, reward, terminated, next_obs)
+            # 使用 info (true_label) 来更新模型（也可以使用 reward，看你的设计）
+            agent.update(obs, action, reward, terminated, info)
+            env.policy_weight = agent.previous_policy_weight
 
             # update if the environment is done and the current obs
-            # "truncated" does not acctually happen in Blackjack
             done = terminated or truncated
-            obs = next_obs
-
-        agent.decay_epsilon()
+            obs, info = next_obs, info
 
     return agent, env
 
