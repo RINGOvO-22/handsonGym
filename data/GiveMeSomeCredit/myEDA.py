@@ -134,6 +134,6 @@ def data_process_v2():
     print("Max:\n", testData.max())
 
 if __name__ == "__main__":
-    data_process()
-    # data_process_v2()
+    # data_process() # unnormalized
+    data_process_v2() # normalized
     print("Data processing completed.")

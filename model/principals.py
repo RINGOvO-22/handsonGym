@@ -3,15 +3,22 @@ import numpy as np
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 import torch
+import csv
+
+# default hyperparameters
+learning_rate = 0.0001
+init_cost_pram = 2.0
+discount_factor = 0.99
+predict_label_threshold = 0.5
 
 # a principal for the credit scoring v1 environment
 class Principal_v1:
     def __init__(
         self,
         env: gym.Env,
-        learning_rate_critic: float = 0.001,
-        learning_rate_actor: float = 0.001,
-        learning_rate_cost: float = 0.001,
+        learning_rate_critic: float = learning_rate,
+        learning_rate_actor: float = learning_rate,
+        learning_rate_cost: float = learning_rate,
         init_cost_pram:  float = 2.0, # same as in the "made practical" paper 
         discount_factor: float = 0.99,
     ):
@@ -29,21 +36,27 @@ class Principal_v1:
         self.env = env
         self.discount_factor = discount_factor
         self.lr_a = learning_rate_actor
-        self.previous_policy_weight = np.zeros(10+1, dtype=np.float32) # policy weight for the classifier sigmoid(w*x + b)
+        # hyperparameter: initial policy weight for the classifier
+        self.previous_policy_weight = np.ones(10+1, dtype=np.float64) * 0.01 # policy weight for the classifier sigmoid(w*x + b)
         
         self.lr_c = learning_rate_critic
         # q value weights for the classifier (v*(s, a) + b)
         # +1: bias term,  +1: action term
-        self.q_weights = np.ones(10+1+1, dtype=np.float32) * 0.1
+        self.q_weights = np.ones(10+1+1, dtype=np.float64) * 0.01
 
         # initial cost parameter estimation for the principal
-        self.cost_pram_estimation = np.full(shape=10, fill_value=init_cost_pram, dtype=np.float32)
+        self.cost_pram_estimation = np.full(shape=10, fill_value=init_cost_pram, dtype=np.float64)
         self.lr_cost = learning_rate_cost
 
+        # record training and testing process
         self.training_error = []
         self.training_accuracy = []
+        self.training_acc_detail = []
         self.training_rewards = []
+        self.training_policy_weights = []
+
         self.testing_accuracy = []
+        self.testing_acc_detail = []
 
     # policy function
     def get_action(self, obs: np.ndarray) -> int:
@@ -66,7 +79,7 @@ class Principal_v1:
         prob = 1 / (1 + np.exp(-logits))
         
         # 阈值判断
-        return 1 if prob > 0.5 else 0
+        return 1 if prob > predict_label_threshold else 0
         
     def update(
         self,
@@ -86,7 +99,6 @@ class Principal_v1:
             terminated: 是否终止
             info: 其他信息（可选）
         """
-
         # Step 1: append bias to obs
         obs_with_bias = np.append(obs, 1.0)  # shape: (11,)
         
@@ -129,9 +141,17 @@ class Principal_v1:
         # Record training results
         self.training_error.append(abs(prob - info['true_label']))
         self.training_rewards.append(reward)
-        pred = 1 if prob > 0.5 else 0
+        self.training_policy_weights.append(self.previous_policy_weight.copy())
+
+        pred = self.get_action(obs)
         accuracy = 1.0 if pred == int(info['true_label']) else 0.0
         self.training_accuracy.append(accuracy)
+        self.training_acc_detail.append({
+            'action': action,
+            'true_label': info['true_label'],
+            'predicted_label': pred,
+            'accuracy': accuracy
+        })
 
     def test_result_record(self, action: int, info: dict):
         """
@@ -141,6 +161,12 @@ class Principal_v1:
             action: 执行的动作
             info: 包含 true_label 的字典
         """
-        pred = 1 if action > 0.5 else 0
+        pred = 1 if action > predict_label_threshold else 0
         accuracy = 1.0 if pred == int(info['true_label']) else 0.0
         self.testing_accuracy.append(accuracy)
+
+        # detail record
+        self.testing_acc_detail.append({
+            'action': action, 
+            'true_label': info['true_label']
+            })

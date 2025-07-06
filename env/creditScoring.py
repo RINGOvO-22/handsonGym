@@ -23,7 +23,7 @@ class creditScoring_v1(gym.Env):
             # high=1.0,
             high = 10000000,
             shape=(10,),
-            dtype=np.float32
+            dtype=np.float64
         )
 
         # action space: discrete action space with 2 actions (0 or 1)
@@ -34,7 +34,7 @@ class creditScoring_v1(gym.Env):
         #     low=0.0,
         #     high=1.0,
         #     shape=(1,),
-        #     dtype=np.float32
+        #     dtype=np.float64
         # )
 
         # Define the pointer to the sample for online learning
@@ -47,7 +47,7 @@ class creditScoring_v1(gym.Env):
 
         # parameter of the real cost function
         # Assume using a weighted quadratic cost function (same as in the "made practical" paper)
-        self.cost_weight = np.full(shape=10, fill_value=0.5, dtype=np.float32)
+        self.cost_weight = np.full(shape=10, fill_value=0.5, dtype=np.float64)
         self.policy_weight = policy_weight
 
     def load_data(self):
@@ -106,10 +106,10 @@ class creditScoring_v1(gym.Env):
         # # test
         # device = 'cpu'  # 强制使用 CPU 以避免 GPU 相关问题
 
-        # # 转换为 float32 类型
-        real_feature = real_feature.astype(np.float32)
-        policy_weight = np.array(policy_weight).astype(np.float32)
-        cost_weight = self.cost_weight.astype(np.float32)
+        # # 转换为 float64 类型
+        real_feature = real_feature.astype(np.float64)
+        policy_weight = np.array(policy_weight).astype(np.float64)
+        cost_weight = self.cost_weight.astype(np.float64)
 
         # 转为 PyTorch tensor 并移动到 GPU（如果可用）
         real_x = torch.tensor(real_feature, device=device, requires_grad=False)
@@ -144,7 +144,7 @@ class creditScoring_v1(gym.Env):
             with torch.no_grad():
                 z[:] = z.clamp(0.0, 1.0)
 
-        # test
+        # tests
         # return real_feature
     
         # 返回 numpy 格式结果
@@ -175,7 +175,7 @@ class creditScoring_v1(gym.Env):
         shuffled_train = self.train_data.sample(frac=1.0, random_state=42)
 
         # 使用 iloc 按位置提取第一列作为标签
-        self.train_y = shuffled_train.iloc[:, 0].astype(np.float32).values
+        self.train_y = shuffled_train.iloc[:, 0].astype(np.float64).values
 
         # 剩余列作为特征
         self.train_x = shuffled_train.iloc[:, 1:].to_numpy()
@@ -194,14 +194,14 @@ class creditScoring_v1(gym.Env):
         # print(f"total samples: {len(self.train_x) if self.mode == 'train' else len(self.test_x)}")
         # print(f"\nSampling persentage: {math.ceil(self.samplePointer/len(self.train_x)*100)}%")
         
-        if action == 1 and self.train_y[self.samplePointer] == 0:
-            reward = +1.0  # 正确批准
-        elif action == 1 and self.train_y[self.samplePointer] == 1:
-            reward = -1.0  # 错误批准
-        elif action == 0 and self.train_y[self.samplePointer] == 0:
-            reward = -0.5  # 错误拒绝好用户
-        else:  # action == 0 and label == 1
-            reward = +0.5  # 正确拒绝坏用户
+        if action == 0 and self.train_y[self.samplePointer] == 0:
+            reward = +0.1  # 正确批准
+        elif action == 0 and self.train_y[self.samplePointer] == 1:
+            reward = -0.1  # 错误批准
+        elif action == 1 and self.train_y[self.samplePointer] == 0:
+            reward = -1000  # 错误拒绝好用户
+        else:  # action == 1 and label == 1
+            reward = +1000  # 正确拒绝坏用户
             
         self.policy_weight = previous_policy_weight if previous_policy_weight is not None else self.policy_weight
 
