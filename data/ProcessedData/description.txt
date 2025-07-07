@@ -1,0 +1,2 @@
+Training set: column 1 is the target label
+Testing set: column 1 is a placeholder, the real target label is contained in "sampleEvtry.csv". 

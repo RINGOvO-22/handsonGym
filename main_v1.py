@@ -5,13 +5,17 @@ from matplotlib import pyplot as plt
 from env.creditScoring import creditScoring_v1
 from model.principals import Principal_v1
 import csv
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 
 # hyperparameters
-max_time_steps = 2000 # maximum time steps per episode
+max_time_steps = 100000 # maximum time steps per episode
 rolling_length = max_time_steps//20  # for plotting moving averages
 init_cost_pram=2.0,
-learning_rate = 1e-5
+learning_rate = 1e-4
 n_episodes = 1
+mode = "normalized data + strategic response"
 
 def main():
     env = gym.make("creditScoring_v1", mode='train')
@@ -28,17 +32,16 @@ def main():
     )
 
     for episode in tqdm(range(n_episodes)):
+        # train
         obs, info = env.reset()
         done = False
-
-        # while not done:
         for step in tqdm(range(max_time_steps), desc=f"Train: Step in episode {episode}"):
             if done:
                 break
 
-            action = agent.get_action(obs)
+            _, action = agent.get_action(obs)
             next_obs, reward, terminated, truncated, info = env.step(action)
-
+            
             # 使用 info (true_label) 来更新模型
             agent.update(obs, action, reward, terminated, info)
             env.policy_weight = agent.previous_policy_weight  # update the policy weight in the environment
@@ -46,16 +49,17 @@ def main():
             # update if the environment is done and the current obs
             done = terminated or truncated
             obs, info = next_obs, info
+        print(f"Training: Batch update count: {agent.batch_update_count}")
 
-        # test the model
+        # test
         obs, info = env_test.reset()
         done = False
         for step in tqdm(range(max_time_steps), desc=f"Test: Step in episode {episode}"):
             if done:
                 break
-            action = agent.get_action(obs)
+            prob, action = agent.get_action(obs)
             next_obs, reward, terminated, truncated, info = env_test.step(action)
-            agent.test_result_record( action, info)
+            agent.test_result_record(action, info, prob)
 
             # update if the environment is done and the current obs
             done = terminated or truncated
@@ -70,7 +74,7 @@ def get_moving_avgs(arr, window, convolution_mode):
         mode=convolution_mode
     ) / window
 
-def plot_results(agent, env, rolling_length=rolling_length):
+def plot_results_accAndRewards_export(agent, env, rolling_length=rolling_length):
     fig, axs = plt.subplots(ncols=3, figsize=(12, 5))
 
     # Plot Training Accuracy with Moving Average
@@ -156,12 +160,12 @@ def training_accuracy_export(agent):
     path = './result/last_experiment/training_acc_detail.csv'
     with open(path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['action', 'true_label', 'predicted_label', 'accuracy'])
+        writer.writerow(['predicted_prob', 'predicted_label', 'true_label', 'accuracy'])
         for detail in agent.training_acc_detail:
             writer.writerow([
-                detail['action'],
-                detail['true_label'],
+                detail['predicted_prob'],
                 detail['predicted_label'],
+                detail['true_label'],
                 detail['accuracy']
             ])
     print(f"Training accuracy details saved to {path}")
@@ -187,13 +191,49 @@ def testing_accuracy_export(agent):
             ])
     print(f"Testing accuracy details saved to {path}")
 
+def plot_test_auc(agent):
+    """
+    使用 self.testing_acc_detail 绘制 ROC 曲线并计算 AUC 值
+    要求每个记录中包含 'true_label' 和 'prob'
+    """
+
+    # 提取真实标签和预测概率
+    y_true = [int(item['true_label']) for item in agent.testing_acc_detail]
+    y_score = [item['prob'] for item in agent.testing_acc_detail]
+
+    # 计算 ROC 曲线所需数据
+    fpr, tpr, thresholds = roc_curve(y_true, y_score)
+    roc_auc = auc(fpr, tpr)
+    # 打印 AUC 值
+    print(f"AUC Score: {roc_auc:.4f}")
+    
+    # 绘制 ROC 曲线
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Guess')
+    
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate (FPR)')
+    plt.ylabel('True Positive Rate (TPR)')
+    plt.title('Receiver Operating Characteristic (ROC) Curve')
+    plt.legend(loc="lower right")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('./result/last_experiment/test_auc.png')
+    plt.show()
+
+    
+
 if __name__ == "__main__":
-    print("Current setting:", "normalized data + strategic response.")
+    print("Current setting:", mode)
     agent, env = main()
     training_weights_export(agent)
     training_accuracy_export(agent)
     testing_accuracy_export(agent)
-    plot_policy_weights_export(agent)
+    
 
     # Plot the results
-    plot_results(agent, env, rolling_length=rolling_length)
+    plot_policy_weights_export(agent)
+    plot_test_auc(agent)
+    plot_results_accAndRewards_export(agent, env, rolling_length=rolling_length)

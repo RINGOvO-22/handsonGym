@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 # hyperparameters
 test_label_threshold = 0.5  # threshold for the test label
+strategic_response = False
 
 class creditScoring_v1(gym.Env):
 
@@ -108,6 +109,10 @@ class creditScoring_v1(gym.Env):
 
         # # 转换为 float64 类型
         real_feature = real_feature.astype(np.float64)
+
+        if not strategic_response:
+            return real_feature
+        
         policy_weight = np.array(policy_weight).astype(np.float64)
         cost_weight = self.cost_weight.astype(np.float64)
 
@@ -144,9 +149,6 @@ class creditScoring_v1(gym.Env):
             with torch.no_grad():
                 z[:] = z.clamp(0.0, 1.0)
 
-        # tests
-        # return real_feature
-    
         # 返回 numpy 格式结果
         return z.detach().cpu().numpy()
     
@@ -195,13 +197,13 @@ class creditScoring_v1(gym.Env):
         # print(f"\nSampling persentage: {math.ceil(self.samplePointer/len(self.train_x)*100)}%")
         
         if action == 0 and self.train_y[self.samplePointer] == 0:
-            reward = +0.1  # 正确批准
+            reward = +1  # 正确批准
         elif action == 0 and self.train_y[self.samplePointer] == 1:
-            reward = -0.1  # 错误批准
+            reward = -1  # 错误批准
         elif action == 1 and self.train_y[self.samplePointer] == 0:
-            reward = -1000  # 错误拒绝好用户
+            reward = -0.5  # 错误拒绝好用户
         else:  # action == 1 and label == 1
-            reward = +1000  # 正确拒绝坏用户
+            reward = +0.5  # 正确拒绝坏用户
             
         self.policy_weight = previous_policy_weight if previous_policy_weight is not None else self.policy_weight
 

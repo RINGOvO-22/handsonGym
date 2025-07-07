@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+# hyperparameters
+test_label_threshold = 0.5
 
 def fill_na_with_default(df):
     for col in df.columns:
@@ -101,6 +103,11 @@ def data_process():
     print("Min:\n", testData.min())
     print("Max:\n", testData.max())
 
+    # trainData & testData has the same column struction, where the 1st column is the target label
+    # N.B., the 1st column of the testData is just a placeholder.
+    # N.B., the real target label is saved in sampleEvtry.csv
+    return trainData, testData
+
 def data_process_v2():
     """
     处理数据集，填充缺失值并归一化
@@ -133,7 +140,34 @@ def data_process_v2():
     print("Min:\n", testData.min())
     print("Max:\n", testData.max())
 
+    # trainData & testData has the same column struction, where the 1st column is the target label
+    # N.B., the 1st column of the testData is just a placeholder.
+    # N.B., the real target label is saved in sampleEvtry.csv
+    return trainData, testData
+
+def label_distribution(trainData):
+    datapath = 'data/GiveMeSomeCredit/'
+
+    # 加载 test label
+    test_prob = pd.read_csv(datapath + 'sampleEntry.csv')
+    # test_prob = test_prob.drop(columns=['Id'])  # 删除第一列
+    print(f"\nNumber of test samples: {test_prob.shape[0]}")
+    test_prob_subset = test_prob.loc[:]
+    test_y_1_indices = test_prob.query(f'Probability >= {test_label_threshold}').index.to_list()
+    print(f"Test_y = 1: {len(test_y_1_indices)}")
+    # print(f"Indices of them: {test_y_1_indices}")
+
+    train_subset = trainData.loc[:]
+    train_y_1_indices = train_subset.query(f"SeriousDlqin2yrs == 1").index.to_list()
+    print(f"\nNumber of training samples: {train_subset.shape[0]}")
+    print(f"Train_y = 1: {len(train_y_1_indices)}\n")
+    # print(f"Indices of them: {train_y_1_indices}")
+
+    # train label statistics
+    return
+
 if __name__ == "__main__":
     # data_process() # unnormalized
-    data_process_v2() # normalized
+    trainData, testData = data_process_v2() # normalized
+    label_distribution(trainData)
     print("Data processing completed.")
