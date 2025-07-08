@@ -3,19 +3,22 @@ import numpy as np
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 from env.creditScoring import creditScoring_v1
-from model.principals import Principal_v1
+from model.principal_v1_QAC import Principal_v1
 import csv
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
 
 # hyperparameters
-max_time_steps = 100000 # maximum time steps per episode
-rolling_length = max_time_steps//20  # for plotting moving averages
+max_training_time_steps = 149998 # 149998 / 2000
+max_testing_time_steps = 100000 # 100000 / 2000
+n_episodes = 10
+train_rolling_length = max_training_time_steps//20*n_episodes # for plotting moving averages
+test_rolling_length = max_testing_time_steps//20*n_episodes
 init_cost_pram=2.0,
-learning_rate = 1e-4
-n_episodes = 1
-mode = "normalized data + strategic response"
+learning_rate = 1e-1
+
+mode = "normalized data + non-strategic response"
 
 def main():
     env = gym.make("creditScoring_v1", mode='train')
@@ -35,7 +38,7 @@ def main():
         # train
         obs, info = env.reset()
         done = False
-        for step in tqdm(range(max_time_steps), desc=f"Train: Step in episode {episode}"):
+        for step in tqdm(range(max_training_time_steps), desc=f"Train: Step in episode {episode}"):
             if done:
                 break
 
@@ -51,10 +54,10 @@ def main():
             obs, info = next_obs, info
         print(f"Training: Batch update count: {agent.batch_update_count}")
 
-        # test
-        obs, info = env_test.reset()
-        done = False
-        for step in tqdm(range(max_time_steps), desc=f"Test: Step in episode {episode}"):
+    # test
+    obs, info = env_test.reset()
+    done = False
+    for step in tqdm(range(max_testing_time_steps), desc=f"Test: Step in episode {episode}"):
             if done:
                 break
             prob, action = agent.get_action(obs)
@@ -74,14 +77,14 @@ def get_moving_avgs(arr, window, convolution_mode):
         mode=convolution_mode
     ) / window
 
-def plot_results_accAndRewards_export(agent, env, rolling_length=rolling_length):
+def plot_results_accAndRewards_export(agent, env, train_rolling_length=train_rolling_length, test_rolling_length = test_rolling_length):
     fig, axs = plt.subplots(ncols=3, figsize=(12, 5))
 
     # Plot Training Accuracy with Moving Average
-    axs[0].set_title(f"Training Accuracy (Smoothed over {rolling_length} steps)")
+    axs[0].set_title(f"Training Accuracy (Smoothed over {train_rolling_length} steps)")
     acc_moving_average = get_moving_avgs(
         agent.training_accuracy,
-        rolling_length,
+        train_rolling_length,
         "valid"
     )
     axs[0].plot(range(len(acc_moving_average)), acc_moving_average, label="Smoothed Accuracy")
@@ -90,30 +93,32 @@ def plot_results_accAndRewards_export(agent, env, rolling_length=rolling_length)
     axs[0].set_ylabel("Accuracy")
     axs[0].set_ylim(0.0, 1.0) 
 
-    # Plot Testing Accuracy with Moving Average
-    axs[1].set_title(f"Testting Accuracy (Smoothed over {rolling_length} steps)")
-    acc_moving_average = get_moving_avgs(
-        agent.testing_accuracy,
-        rolling_length,
-        "valid"
-    )
-    axs[1].plot(range(len(acc_moving_average)), acc_moving_average, label="Smoothed Accuracy")
-    axs[1].legend()
-    axs[1].set_xlabel("Testing Step")
-    axs[1].set_ylabel("Accuracy")
-    axs[1].set_ylim(0.0, 1.0)
-
     # Plot Training Rewards with Moving Average
-    axs[2].set_title(f"Training rewards (Smoothed over {rolling_length} steps)")
+    axs[1].set_title(f"Training rewards (Smoothed over {test_rolling_length} steps)")
     acc_moving_average = get_moving_avgs(
         agent.training_rewards,
-        rolling_length,
+        test_rolling_length,
         "valid"
     )
-    axs[2].plot(range(len(acc_moving_average)), acc_moving_average, label="Smoothed Rewards")
+    axs[1].plot(range(len(acc_moving_average)), acc_moving_average, label="Smoothed Rewards")
+    axs[1].legend()
+    axs[1].set_xlabel("Training Step")
+    axs[1].set_ylabel("Reward")
+
+    # Plot Testing Accuracy with Moving Average
+    axs[2].set_title(f"Testting Accuracy (Smoothed over {test_rolling_length} steps)")
+    acc_moving_average = get_moving_avgs(
+        agent.testing_accuracy,
+        test_rolling_length,
+        "valid"
+    )
+    axs[2].plot(range(len(acc_moving_average)), acc_moving_average, label="Smoothed Accuracy")
     axs[2].legend()
-    axs[2].set_xlabel("Training Step")
-    axs[2].set_ylabel("Reward")
+    axs[2].set_xlabel("Testing Step")
+    axs[2].set_ylabel("Accuracy")
+    axs[2].set_ylim(0.0, 1.0)
+
+    
 
     plt.tight_layout()
     plt.savefig('./result/last_experiment/results.png')
@@ -129,6 +134,17 @@ def training_weights_export(agent):
         for weight in agent.training_policy_weights:
             writer.writerow(weight)
     print(f"Training policy weights saved to {path}")
+
+def training_weights_single_update(agent):
+    """
+    记录训练过程中策略权重的变化
+    """
+    path = './result/last_experiment/training_weights_single_update.csv'
+    with open(path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        for change in agent.training_single_policy_weight_update:
+            writer.writerow(change)
+    print(f"Training policy weight-change saved to {path}")
 
 def plot_policy_weights_export(agent):
     weights_array = np.array(agent.training_policy_weights)  # shape: (n_steps, 11)
@@ -231,9 +247,10 @@ if __name__ == "__main__":
     training_weights_export(agent)
     training_accuracy_export(agent)
     testing_accuracy_export(agent)
+    training_weights_single_update(agent)
     
 
     # Plot the results
     plot_policy_weights_export(agent)
     plot_test_auc(agent)
-    plot_results_accAndRewards_export(agent, env, rolling_length=rolling_length)
+    plot_results_accAndRewards_export(agent, env, train_rolling_length, test_rolling_length)

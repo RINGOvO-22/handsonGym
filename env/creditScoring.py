@@ -80,7 +80,8 @@ class creditScoring_v1(gym.Env):
 
         return train_data, test_x, test_y
 
-    def strategic_response(self, 
+    # no convergence checking
+    def strategic_response_old(self, 
                            real_feature: np.ndarray, 
                            policy_weight: np.ndarray,
                            learning_rate=0.01,
@@ -152,6 +153,75 @@ class creditScoring_v1(gym.Env):
         # 返回 numpy 格式结果
         return z.detach().cpu().numpy()
     
+    def strategic_response(self, 
+                           real_feature: np.ndarray, 
+                           policy_weight: np.ndarray,
+                           learning_rate=0.01,
+                           num_steps=50):
+        """
+        A strategic response function that simulates the applicant's strategic response to the model.
+        """
+        # 统计调用次数（静态变量实现）
+        if not hasattr(self, "_response_call_count"):
+            self._response_call_count = 0
+        self._response_call_count += 1
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        real_feature = real_feature.astype(np.float64)
+        if not strategic_response:
+            return real_feature
+
+        policy_weight = np.array(policy_weight).astype(np.float64)
+        cost_weight = self.cost_weight.astype(np.float64)
+
+        real_x = torch.tensor(real_feature, device=device, requires_grad=False)
+        cost_v = torch.tensor(cost_weight, device=device, requires_grad=False)
+        W = torch.tensor(policy_weight[:-1], device=device, requires_grad=False)
+        b = torch.tensor(policy_weight[-1], device=device, requires_grad=False)
+        z = torch.tensor(real_feature, device=device, requires_grad=True)
+
+        optimizer = torch.optim.Adam([z], lr=learning_rate)
+
+        # 如果需要记录 z 的变化曲线
+        record_z = self._response_call_count in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+        if record_z:
+            z_history = []
+
+        for _ in range(num_steps):
+            optimizer.zero_grad()
+            logits = torch.dot(W, z) + b
+            fz = torch.sigmoid(logits)
+            cz = torch.sum(cost_v * (z - real_x) ** 2)
+            loss = -fz + cz
+            loss.backward()
+            optimizer.step()
+            with torch.no_grad():
+                z[:] = z.clamp(0.0, 1.0)
+
+            if record_z:
+                z_history.append(z.detach().cpu().numpy().copy())
+
+        # 可视化：画出每一维 z 的变化趋势
+        if record_z:
+            import matplotlib.pyplot as plt
+            z_array = np.array(z_history)  # shape: (steps, dim)
+            dim = z_array.shape[1]
+            plt.figure(figsize=(12, 6))
+            for i in range(dim):
+                plt.plot(range(num_steps), z_array[:, i], label=f'z[{i}]')
+            plt.title(f'z Convergence Trend (Call #{self._response_call_count})')
+            plt.xlabel("Iteration Step")
+            plt.ylabel("z value")
+            plt.legend(loc='best', bbox_to_anchor=(1.05, 1))
+            plt.tight_layout()
+            plt.grid(True)
+            plt.savefig(f"./result/last_experiment/z_convergence_call_{self._response_call_count}.png")
+            # plt.show()
+            plt.close()
+
+        return z.detach().cpu().numpy()
+
+
     # called in .reset() & .step()
     def _get_obs(self):
         if self.mode == 'train':
@@ -201,9 +271,9 @@ class creditScoring_v1(gym.Env):
         elif action == 0 and self.train_y[self.samplePointer] == 1:
             reward = -1  # 错误批准
         elif action == 1 and self.train_y[self.samplePointer] == 0:
-            reward = -0.5  # 错误拒绝好用户
+            reward = -1  # 错误拒绝好用户
         else:  # action == 1 and label == 1
-            reward = +0.5  # 正确拒绝坏用户
+            reward = +1  # 正确拒绝坏用户
             
         self.policy_weight = previous_policy_weight if previous_policy_weight is not None else self.policy_weight
 

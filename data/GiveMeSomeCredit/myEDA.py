@@ -118,6 +118,21 @@ def data_process_v2():
     trainData = pd.read_csv(datapath + 'cs-training.csv')
     trainData = trainData.drop(columns=['Unnamed: 0'])  # 删除第一列
     trainData = fill_na_with_default(trainData)
+
+    # 观察最值与均值
+    # 获取训练集的 min/max
+    min_vals, max_vals = get_min_max_from_train(trainData, exclude_columns=['SeriousDlqin2yrs'])
+    train_means = trainData.mean(numeric_only=True)
+
+    # 打印清晰格式的统计信息
+    print("\n=== Pre-normalization statistics (train data) ===")
+    stat_df = pd.DataFrame({
+        'Min': pd.Series(min_vals),
+        'Max': pd.Series(max_vals),
+        'Mean': train_means
+    })
+    print(stat_df.to_string(float_format='%.4f'))
+
     # 获取训练集的 min/max
     min_vals, max_vals = get_min_max_from_train(trainData, exclude_columns=['SeriousDlqin2yrs'])
     # 对训练集归一化
@@ -127,6 +142,7 @@ def data_process_v2():
     print("\nTrain data normalized and saved.")
     print("Min:\n", trainData.min())
     print("Max:\n", trainData.max())
+    print("\n===================================================================\n")
 
     # 加载测试集
     testData = pd.read_csv(datapath + 'cs-test.csv')
@@ -145,7 +161,77 @@ def data_process_v2():
     # N.B., the real target label is saved in sampleEvtry.csv
     return trainData, testData
 
+def data_process_v3():
+    """
+    处理数据集，填充缺失值 + 剪裁极端值 + min-max归一化（推荐方式）
+    """
+    datapath = 'data/GiveMeSomeCredit/'
+
+    # 加载训练集
+    trainData = pd.read_csv(datapath + 'cs-training.csv')
+    trainData = trainData.drop(columns=['Unnamed: 0'])  # 删除第一列
+    trainData = fill_na_with_default(trainData)
+
+    # 打印未归一化前统计
+    min_vals, max_vals = get_min_max_from_train(trainData, exclude_columns=['SeriousDlqin2yrs'])
+    train_means = trainData.mean(numeric_only=True)
+
+    print("\n=== Pre-normalization statistics (train data) ===")
+    stat_df = pd.DataFrame({
+        'Min': pd.Series(min_vals),
+        'Max': pd.Series(max_vals),
+        'Mean': train_means
+    })
+    print(stat_df.to_string(float_format='%.4f'))
+
+    # 分位数剪裁（对数值型列）
+    for col in trainData.columns:
+        if col == 'SeriousDlqin2yrs':
+            continue
+        if pd.api.types.is_numeric_dtype(trainData[col]):
+            q_low, q_high = trainData[col].quantile([0.01, 0.99])
+            trainData[col] = trainData[col].clip(q_low, q_high)
+
+    # 再次获取剪裁后的 min/max（用于归一化）
+    min_vals, max_vals = get_min_max_from_train(trainData, exclude_columns=['SeriousDlqin2yrs'])
+
+    # 归一化
+    trainData = normalize_with_min_max(trainData, min_vals, max_vals, exclude_columns=['SeriousDlqin2yrs'])
+
+    # 保存训练集
+    trainData.to_csv("data/ProcessedData/cs-training-processed.csv", index=False)
+    print("\nTrain data clipped, normalized and saved.")
+    print("Min:\n", trainData.min())
+    print("Max:\n", trainData.max())
+
+    print("\n===================================================================\n")
+
+    # 加载测试集
+    testData = pd.read_csv(datapath + 'cs-test.csv')
+    testData = testData.drop(columns=['Unnamed: 0'])
+    testData = fill_na_with_default(testData)
+
+    # 对测试集进行与训练集一致的剪裁
+    for col in testData.columns:
+        if col == 'SeriousDlqin2yrs':
+            continue
+        if pd.api.types.is_numeric_dtype(testData[col]) and col in min_vals:
+            q_low, q_high = testData[col].quantile([0.01, 0.99])
+            testData[col] = testData[col].clip(q_low, q_high)
+
+    # 用训练集的 min/max 对测试集归一化
+    testData = normalize_with_min_max(testData, min_vals, max_vals, exclude_columns=['SeriousDlqin2yrs'])
+
+    # 保存测试集
+    testData.to_csv("data/ProcessedData/cs-test-processed.csv", index=False)
+    print("\nTest data clipped, normalized and saved.")
+    print("Min:\n", testData.min())
+    print("Max:\n", testData.max())
+
+    return trainData, testData
+
 def label_distribution(trainData):
+    print("\n================ label distribution check ==================")
     datapath = 'data/GiveMeSomeCredit/'
 
     # 加载 test label
@@ -167,7 +253,6 @@ def label_distribution(trainData):
     return
 
 if __name__ == "__main__":
-    # data_process() # unnormalized
-    trainData, testData = data_process_v2() # normalized
+    trainData, testData = data_process_v3() # clip + min-max normalilzation
     label_distribution(trainData)
     print("Data processing completed.")
