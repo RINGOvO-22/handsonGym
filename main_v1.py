@@ -12,31 +12,27 @@ import matplotlib.pyplot as plt
 # hyperparameters
 max_training_time_steps = 149998 # 149998 / 2000
 max_testing_time_steps = 100000 # 100000 / 2000
-n_episodes = 10
+n_episodes = 1
 train_rolling_length = max_training_time_steps//20*n_episodes # for plotting moving averages
 test_rolling_length = max_testing_time_steps//20*n_episodes
-init_cost_pram=2.0,
 learning_rate = 1e-1
 
 mode = "normalized data + non-strategic response"
 
 def main():
     env = gym.make("creditScoring_v1", mode='train')
-    # env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=n_episodes)
-    env_test = gym.make("creditScoring_v1", mode='test')
-    # env_test = gym.wrappers.RecordEpisodeStatistics(env_test, buffer_length=n_episodes)
-
     agent = Principal_v1(
         env=env,
         learning_rate_actor=learning_rate,
         learning_rate_critic=learning_rate,
         learning_rate_cost=learning_rate,
-        init_cost_pram=init_cost_pram,
     )
+    env.policy_weight = agent.previous_policy_weight
 
     for episode in tqdm(range(n_episodes)):
         # train
         obs, info = env.reset()
+        env.policy_weight = agent.previous_policy_weight
         done = False
         for step in tqdm(range(max_training_time_steps), desc=f"Train: Step in episode {episode}"):
             if done:
@@ -52,15 +48,17 @@ def main():
             # update if the environment is done and the current obs
             done = terminated or truncated
             obs, info = next_obs, info
-        print(f"Training: Batch update count: {agent.batch_update_count}")
+    print(f"\nTraining: Batch update count: {agent.batch_update_count}\n")
 
     # test
+    env_test = gym.make("creditScoring_v1", mode='test')
     obs, info = env_test.reset()
+    env_test.policy_weight = agent.previous_policy_weight
     done = False
     for step in tqdm(range(max_testing_time_steps), desc=f"Test: Step in episode {episode}"):
             if done:
                 break
-            prob, action = agent.get_action(obs)
+            prob, action = agent.get_action(obs, stochastic=False)
             next_obs, reward, terminated, truncated, info = env_test.step(action)
             agent.test_result_record(action, info, prob)
 
@@ -161,7 +159,7 @@ def plot_policy_weights_export(agent):
     plt.grid(True)
     plt.tight_layout()
     plt.savefig('./result/last_experiment/policy_weights_all_dims.png')
-    plt.show()
+    plt.close()
 
 def training_accuracy_export(agent):
     # 记录训练过程中准确率的变化
@@ -239,7 +237,17 @@ def plot_test_auc(agent):
     plt.savefig('./result/last_experiment/test_auc.png')
     plt.show()
 
-    
+def training_batch_detail_export(agent):
+    path = './result/last_experiment/training_batch_detail.csv'
+    with open(path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['true_label', 'action'])  # 只写出这两列
+        for batches in agent.training_batch_detail:
+            for sample in batches:
+                action = sample[1]         # 第 2 个元素是 action
+                true_label = sample[-1]    # 最后一个元素是 true_label
+                writer.writerow([ true_label,action])
+    print(f"Training batch details saved to {path}")
 
 if __name__ == "__main__":
     print("Current setting:", mode)
@@ -248,7 +256,7 @@ if __name__ == "__main__":
     training_accuracy_export(agent)
     testing_accuracy_export(agent)
     training_weights_single_update(agent)
-    
+    training_batch_detail_export(agent)
 
     # Plot the results
     plot_policy_weights_export(agent)

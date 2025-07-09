@@ -1,17 +1,15 @@
+from collections import deque
 import gymnasium as gym
 import numpy as np
-from tqdm import tqdm
-from matplotlib import pyplot as plt
-import torch
-import csv
 
 # default hyperparameters
 default_learning_rate = 0.01
-default_init_cost_pram = 2.0
 default_discount_factor = 0.99
-default_predict_label_threshold = 0.5 # 0.5
+default_predict_label_threshold = 0.5
 default_pos_buffer_size = 5
 default_pos_neg_ratio = 1.0
+default_init_cost_pram = 2.0
+np.random.seed(77)
 
 # a principal for the credit scoring v1 environment
 class Principal_v1:
@@ -23,40 +21,34 @@ class Principal_v1:
         learning_rate_cost: float = default_learning_rate,
         pos_buffer_size: int = default_pos_buffer_size,
         pos_neg_ratio: float = default_pos_neg_ratio,
-        init_cost_pram:  float = 2.0, # same as in the "made practical" paper 
         discount_factor: float = 0.99,
+        init_cost_pram:  float = 2.0, # same as in the "made practical" paper 
+        
     ):
         """Initialize a Reinforcement Learning agent with an empty dictionary
         of state-action values (q_values), a learning rate and an epsilon.
-
-        Args:
-            env: The training environment
-            learning_rate: The learning rate
-            initial_epsilon: The initial epsilon value
-            epsilon_decay: The decay for epsilon in each step
-            final_epsilon: The final epsilon value
-            discount_factor: The discount factor for computing the Q-value
         """
         self.env = env
         self.discount_factor = discount_factor
         self.lr_a = learning_rate_actor
         # hyperparameter: initial policy weight for the classifier
         self.previous_policy_weight = np.random.normal(loc=0.0, scale=0.1, size=(11,))
+        # self.previous_policy_weight = np.ones(10+1, dtype=np.float64) * 0.01
 
-        
         self.lr_c = learning_rate_critic
         # q value weights for the classifier (v*(s, a) + b)
         # +1: bias term,  +1: action term
         self.q_weights = np.ones(10+1+1, dtype=np.float64) * 0.01
 
-        # initial cost parameter estimation for the principal
+        # initial cost parameter estimation for the principal (not used yet)
         self.cost_pram_estimation = np.full(shape=10, fill_value=init_cost_pram, dtype=np.float64)
         self.lr_cost = learning_rate_cost
 
         # buffer craeted for both pos sample and neg sample
-        self.pos_buffer, self.neg_buffer = [], []
         self.pos_buffer_size = pos_buffer_size
         self.neg_buffer_size = int(pos_buffer_size * pos_neg_ratio)
+        self.pos_buffer = deque(maxlen=self.pos_buffer_size)
+        self.neg_buffer = deque(maxlen=self.neg_buffer_size)
 
         # record training and testing process
         self.batch_update_count = 0
@@ -66,43 +58,41 @@ class Principal_v1:
         self.training_rewards = []
         self.training_policy_weights = []
         self.training_single_policy_weight_update = []
+        self.training_batch_detail = []
 
         self.testing_accuracy = []
         self.testing_acc_detail = []
 
     # policy function
-    def get_action(self, obs: np.ndarray) -> int:
-        """
-        making predictions based on the current observation and take strategic response into account.
-        
-        参数:
-            obs (np.ndarray): 观察值 (feature vector)
-            
-        返回:
-            action (int): 0 or 1
-        """
-        # 添加 bias term 到 obs
-        obs_with_bias = np.append(obs, 1.0)  # shape (11,)
-        
-        # 计算 logits: W^T x + b
+    def get_action(self, obs: np.ndarray, stochastic=True) -> int:
+        obs_with_bias = np.append(obs, 1.0)
         logits = np.dot(self.previous_policy_weight, obs_with_bias)
-        
-        # 计算概率
         prob = 1 / (1 + np.exp(-logits))
         
-        # 阈值判断
-        return prob, 1 if prob > default_predict_label_threshold else 0
+        if stochastic:
+            action = np.random.binomial(n=1, p=prob)
+        else:
+            action = 1 if prob > default_predict_label_threshold else 0
+
+        return prob, action
+
         
     def batch_update(self):
         if len(self.pos_buffer) < self.pos_buffer_size or len(self.neg_buffer) < self.neg_buffer_size:
             return  # 不足够数据，不更新
+
+        # record
+        # 不加 list 的话存储的是引用. 后面 clear 的时候会被清空.
+        self.training_batch_detail.append(list(self.pos_buffer))
+        self.training_batch_detail.append(list(self.neg_buffer))
+
 
         self.batch_update_count += 1
         # 合并并打乱
         batch = self.pos_buffer + self.neg_buffer
         np.random.shuffle(batch)
 
-        for obs, action, reward, terminated, next_obs in batch:
+        for obs, action, reward, terminated, next_obs, true_label in batch:
             # Critic部分
             obs_with_bias = np.append(obs, 1.0)                # shape (11,)
             q_input = np.append(obs_with_bias, action)         # shape (12,)
@@ -128,9 +118,14 @@ class Principal_v1:
             prob = 1 / (1 + np.exp(-logits))
             grad_log_pi = (action - prob) * obs_with_bias
             # grad_log_pi = np.clip(grad_log_pi, -1.0, 1.0)
-            self.previous_policy_weight += self.lr_a * td_error * grad_log_pi
+            weight_update = self.lr_a * td_error * grad_log_pi
+            self.previous_policy_weight += weight_update
             
             # record weight update
+            # if self.batch_update_count < 20:
+            #     weight_update = self.lr_a * td_error * grad_log_pi
+            #     print("Weight update:", weight_update)
+            #     print("td_error:", td_error, "grad_log_pi:", grad_log_pi)
             self.training_single_policy_weight_update.append(self.lr_a * td_error * grad_log_pi)
             
         # 清空 buffer
@@ -147,22 +142,12 @@ class Principal_v1:
     ):
         true_label = info['true_label']
         next_obs = info.get('next_obs', None)
-        sample = (obs, action, reward, terminated, next_obs)
+        sample = (obs, action, reward, terminated, next_obs, true_label)
 
         if true_label == 1:
-            if len(self.pos_buffer) < self.pos_buffer_size:
-                self.pos_buffer.append(sample)
-            else:
-                # 正样本已满 -> 随机替换
-                idx = np.random.randint(self.pos_buffer_size)
-                self.pos_buffer[idx] = sample
+            self.pos_buffer.append(sample)  # 自动 FIFO 替换最旧数据
         else:
-            if len(self.neg_buffer) < self.neg_buffer_size:
-                self.neg_buffer.append(sample)
-            else:
-                # 负样本已满 -> 随机替换
-                idx = np.random.randint(self.neg_buffer_size)
-                self.neg_buffer[idx] = sample
+            self.neg_buffer.append(sample)
 
         # 满足触发条件时才 batch 更新
         if len(self.pos_buffer) >= self.pos_buffer_size and len(self.neg_buffer) >= self.neg_buffer_size:

@@ -9,34 +9,28 @@ from tqdm import tqdm
 
 # hyperparameters
 test_label_threshold = 0.5  # threshold for the test label
+seed = 77
 strategic_response = False
 
 class creditScoring_v1(gym.Env):
 
     def __init__(self, mode='train' or 'test', 
-                 policy_weight=[1]*11, 
+                 policy_weight=[0.1]*11, 
                  maximum_episode_length: int = 1000000):
         self.mode = mode
         self.maximum_episode_length = maximum_episode_length
+
         # obsevation space: 10-dimensional vector
         self.observation_space = gym.spaces.Box(
             low=0.0,
-            # high=1.0,
-            high = 10000000,
+            high=1.0,
+            # high = 10000000,
             shape=(10,),
             dtype=np.float64
         )
 
         # action space: discrete action space with 2 actions (0 or 1)
         self.action_space = gym.spaces.Discrete(2)
-
-        # # action space: 1-dimensional vector
-        # self.action_space = gym.spaces.Box(
-        #     low=0.0,
-        #     high=1.0,
-        #     shape=(1,),
-        #     dtype=np.float64
-        # )
 
         # Define the pointer to the sample for online learning
         self.samplePointer = 0
@@ -55,21 +49,20 @@ class creditScoring_v1(gym.Env):
         path = "data/ProcessedData/"
 
         train_data = pd.read_csv(path + "cs-training-processed.csv")
-        train_data["NumberOfDependents"] = train_data["NumberOfDependents"].astype(int)
-        train_data["MonthlyIncome"] = train_data["MonthlyIncome"].astype(int)
-        # extract the target column and the features
-        # train_x = train_data.drop(columns=['SeriousDlqin2yrs']).to_numpy()
-        # train_y = train_data['SeriousDlqin2yrs'].to_numpy()  # extract the target column
+        # train_data["NumberOfDependents"] = train_data["NumberOfDependents"].astype(int)
+        # train_data["MonthlyIncome"] = train_data["MonthlyIncome"].astype(int)
 
         test_data = pd.read_csv(path + "cs-test-processed.csv")
         test_prob = pd.read_csv(path + "sampleEntry.csv")
-        test_data["NumberOfDependents"] = test_data["NumberOfDependents"].astype(int)
-        test_data["MonthlyIncome"] = test_data["MonthlyIncome"].astype(int)
+        # test_data["NumberOfDependents"] = test_data["NumberOfDependents"].astype(int)
+        # test_data["MonthlyIncome"] = test_data["MonthlyIncome"].astype(int)
         # extract the target column and the features
         test_x = test_data.drop(columns=['SeriousDlqin2yrs']).to_numpy()
         test_y = test_prob.drop(columns=['Id']).to_numpy()  # drop the ID column
         test_y = test_y.ravel() # flatten the target to 1D array
         test_y = (test_y >= test_label_threshold).astype(int)
+        
+        print("test_y label distribution:", np.bincount(test_y))
         
         # test_data_2 = np.column_stack((test_x, test_y))  # combine features and target for test data
         
@@ -79,79 +72,6 @@ class creditScoring_v1(gym.Env):
         # print(f"test_y shape: {test_y.shape}, dtype: {test_y.dtype}")
 
         return train_data, test_x, test_y
-
-    # no convergence checking
-    def strategic_response_old(self, 
-                           real_feature: np.ndarray, 
-                           policy_weight: np.ndarray,
-                           learning_rate=0.01,
-                           num_steps=50):
-        """
-        A strategic response function that simulates the applicat's stratigic responce to the model.
-        It takes the real feature as input and returns a manipulated feature.
-        policy function: sigmoid(WX+b)
-        成本函数: c(z, x) = sum(v_i * (z_i - x_i)^2)
-        参数:
-            real_feature (np.ndarray): 原始特征 x (numpy array)
-            policy_weight (np.ndarray): 当前模型权重 W 和 bias b (最后一项是 bias)
-            cost_weights (np.ndarray): 成本函数中的 v_i 参数
-            learning_rate (float): 梯度下降的学习率
-            num_steps (int): 优化步数
-            
-        返回:
-            z (np.ndarray): 最优响应后的修改特征 z*
-        """
-        # 检查是否可用 GPU
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        # print(f"Using device: {device}")
-
-        # # test
-        # device = 'cpu'  # 强制使用 CPU 以避免 GPU 相关问题
-
-        # # 转换为 float64 类型
-        real_feature = real_feature.astype(np.float64)
-
-        if not strategic_response:
-            return real_feature
-        
-        policy_weight = np.array(policy_weight).astype(np.float64)
-        cost_weight = self.cost_weight.astype(np.float64)
-
-        # 转为 PyTorch tensor 并移动到 GPU（如果可用）
-        real_x = torch.tensor(real_feature, device=device, requires_grad=False)
-        cost_v = torch.tensor(cost_weight, device=device, requires_grad=False)
-        W = torch.tensor(policy_weight[:-1], device=device, requires_grad=False)  # 权重
-        b = torch.tensor(policy_weight[-1], device=device, requires_grad=False)   # 偏置
-
-        # 初始化 z 为原始输入，并设置 requires_grad=True 以进行梯度优化
-        z = torch.tensor(real_feature, device=device, requires_grad=True)
-
-        # 优化器（也可以换成 SGD、AdamW 等）
-        optimizer = torch.optim.Adam([z], lr=learning_rate)
-
-        for _ in range(num_steps):
-            optimizer.zero_grad()
-
-            # f(z) = sigmoid(W·z + b)
-            logits = torch.dot(W, z) + b
-            fz = torch.sigmoid(logits)
-
-            # c(z, x) = sum(v_i * (z_i - x_i)^2)
-            cz = torch.sum(cost_v * (z - real_x) ** 2)
-
-            # 总目标：maximise f(z) - c(z, x)
-            loss = - fz + cz
-
-            # 反向传播和优化
-            loss.backward()
-            optimizer.step()
-
-            # Clip 到 [0, 1] 区间（假设输入归一化过）
-            with torch.no_grad():
-                z[:] = z.clamp(0.0, 1.0)
-
-        # 返回 numpy 格式结果
-        return z.detach().cpu().numpy()
     
     def strategic_response(self, 
                            real_feature: np.ndarray, 
@@ -244,7 +164,7 @@ class creditScoring_v1(gym.Env):
         super().reset(seed=seed)
 
         # shuffle the training data
-        shuffled_train = self.train_data.sample(frac=1.0, random_state=42)
+        shuffled_train = self.train_data.sample(frac=1.0, random_state=seed)
 
         # 使用 iloc 按位置提取第一列作为标签
         self.train_y = shuffled_train.iloc[:, 0].astype(np.float64).values
@@ -276,25 +196,23 @@ class creditScoring_v1(gym.Env):
             reward = +1  # 正确拒绝坏用户
             
         self.policy_weight = previous_policy_weight if previous_policy_weight is not None else self.policy_weight
-
-        observation = self._get_obs()
-        info = self._get_info()
-
-        self.samplePointer += 1  # Increment the sample pointer
+        
         # The env terminateds when the pointer reaches the end of the data
         if self.mode == 'train':
             terminated = self.samplePointer > len(self.train_x)
         else: 
             terminated = self.samplePointer > len(self.test_x)
-        truncated = self.samplePointer >= self.maximum_episode_length
+        truncated = self.samplePointer > self.maximum_episode_length
+        
+        if not (terminated or truncated):
+            info = self._get_info()
+            self.samplePointer += 1
+            next_obs = self._get_obs()
+        else:
+            next_obs = None
+            info = {}
 
-        return observation, reward, terminated, truncated, info
-
-    def get_epi_length(self):
-        """
-        Returns the maximum episode length.
-        """
-        return self.maximum_episode_length
+        return next_obs, reward, terminated, truncated, info
 
 # Register the environment after the class definition
 gym.register(
