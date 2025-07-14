@@ -1,0 +1,301 @@
+
+from typing import Optional
+import numpy as np
+import gymnasium as gym
+import pandas as pd
+import torch
+from tqdm import tqdm
+from utils.data_prep import load_data as load_train_data
+from scipy.special import expit
+
+"""
+Version 3: use the data processed by methods from "Performative Prediction"
+"""
+
+# hyperparameters
+test_label_threshold = 0.5  # threshold for the test label
+seed = 0
+strategic_response = False
+response_method = "Close"  # "GA" or "Close"
+strat_features = np.array([1, 6, 8]) - 1
+
+class creditScoring_v3(gym.Env):
+
+    def __init__(self,
+                 policy_weight=[0.1]*11, 
+                 maximum_episode_length: int = 1000000):
+        
+        self.mode = 'train'
+        self.maximum_episode_length = maximum_episode_length
+
+        # obsevation space: 11-dimensional vector (10 features + 1 bias term)
+        self.observation_space = gym.spaces.Box(
+            low=-10.0,
+            high=10.0,
+            # high = 10000000,
+            shape=(11,),
+            dtype=np.float64
+        )
+
+        # action space: discrete action space with 2 actions (0 or 1)
+        self.action_space = gym.spaces.Discrete(2)
+
+        # Define the pointer to the sample for online learning
+        self.samplePointer = 0
+
+        # Load the training and test data
+        filePath = "./data/GiveMeSomeCredit/cs-training.csv"
+        self.train_x, self.train_y, rawData = load_train_data(filePath)
+        self.test_x, self.test_y = self.load_test_data()
+
+        # parameter of the real cost function
+        # Assume using a weighted quadratic cost function (same as in the "made practical" paper)
+        self.cost_weight = np.full(shape=10, fill_value=0.5, dtype=np.float64)
+        self.policy_weight = policy_weight
+    
+    def strategic_response_GA(self, 
+                          real_feature: np.ndarray, 
+                          policy_weight: np.ndarray,
+                          learning_rate=0.01,
+                          num_steps=50,
+                          strat_features: Optional[list] = None):
+        """
+        Strategic response using gradient ascent on utility (-fz + cost), with plotting.
+        Only optimizes over `strat_features`; other features remain fixed.
+        """
+        if not hasattr(self, "_response_call_count"):
+            self._response_call_count = 0
+        self._response_call_count += 1
+
+        if not strategic_response:
+            return real_feature
+
+        if strat_features is None:
+            strat_features = list(range(len(policy_weight) - 1))  # 默认操纵前10维（不含 bias）
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        real_feature = real_feature.astype(np.float32)
+        policy_weight = policy_weight.astype(np.float32)
+        cost_weight = self.cost_weight.astype(np.float32)
+
+        # 初始值与常量准备
+        x_orig = torch.tensor(real_feature, device=device)  # 原始 full 特征
+        x_s = x_orig[strat_features]                        # 可操纵特征
+        theta = torch.tensor(policy_weight[:-1], device=device)
+        theta_s = theta[strat_features]
+        bias = torch.tensor(policy_weight[-1], device=device)
+        cost_s = torch.tensor(cost_weight[strat_features], device=device)
+
+        # z_s 是我们要优化的变量（只优化 strat_features）
+        z_s = x_s.clone().detach().requires_grad_(True)
+        optimizer = torch.optim.Adam([z_s], lr=learning_rate)
+
+        # 记录变化轨迹
+        record_z = self._response_call_count in [10, 20, 30, 40, 50]
+        z_history = []
+
+        for _ in range(num_steps):
+            optimizer.zero_grad()
+
+            # 构造完整输入 z_full（只在 strat_features 上替换）
+            z_full = x_orig.clone().detach()
+            z_full[strat_features] = z_s
+
+            # 计算 model 输出（linear + sigmoid）
+            logits = torch.dot(theta, z_full) + bias
+            fz = torch.sigmoid(logits)
+
+            # cost 只在 strat_features 上
+            cz = torch.sum(cost_s * (z_s - x_s) ** 2)
+
+            loss = -fz + cz
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                z_s.clamp_(0.0, 1.0)
+
+            if record_z:
+                z_history.append(z_s.detach().cpu().numpy().copy())
+
+        # 可视化特征变化
+        if record_z:
+            import matplotlib.pyplot as plt
+            z_array = np.array(z_history)  # shape: (steps, dim_strat)
+            plt.figure(figsize=(12, 6))
+            for i, f_idx in enumerate(strat_features):
+                plt.plot(range(num_steps), z_array[:, i], label=f'z[{f_idx}]')
+            plt.title(f'z Convergence Trend (Call #{self._response_call_count})')
+            plt.xlabel("Iteration Step")
+            plt.ylabel("z value")
+            plt.legend(loc='best', bbox_to_anchor=(1.05, 1))
+            plt.tight_layout()
+            plt.grid(True)
+            plt.savefig(f"./result/last_experiment/z_convergence_call_{self._response_call_count}.png")
+            plt.close()
+
+        # 构造最终 manipulated 特征（只改 strat_features）
+        modified = np.copy(real_feature)
+        modified[strat_features] = z_s.detach().cpu().numpy()
+
+        return modified
+
+    def strategic_response_Close(self, 
+                       real_feature: np.ndarray, 
+                       policy_weight: np.ndarray,
+                       epsilon: float = 0.01,
+                       strat_features: Optional[list] = None):
+        """
+        Best response function with linear utility and quadratic cost.
+        Only manipulates features in strat_features.
+        
+        Parameters
+        ----------
+        real_feature : np.ndarray
+            A 1D array representing the original features of the applicant
+        policy_weight : np.ndarray
+            A 1D array representing the classifier weights (last dimension is bias)
+        epsilon : float
+            Manipulation strength (1 / cost coefficient)
+        strat_features : list
+            Indices of features that can be manipulated
+        """
+        if not strategic_response:
+            return real_feature
+
+        if strat_features is None:
+            strat_features = list(range(len(policy_weight) - 1))  # exclude bias term
+
+        modified = np.copy(real_feature)
+        theta = policy_weight[:-1]  # exclude bias term
+        theta_strat = theta[strat_features]
+
+        # update only strategy features: x'_i = x_i - ε * θ_i
+        modified[strat_features] += -epsilon * theta_strat
+
+        return modified
+
+    def load_test_data(self):
+        path = "data/ProcessedData/"
+
+        test_data = pd.read_csv(path + "cs-test-processed.csv")
+        test_prob = pd.read_csv(path + "sampleEntry.csv")
+        # test_data["NumberOfDependents"] = test_data["NumberOfDependents"].astype(int)
+        # test_data["MonthlyIncome"] = test_data["MonthlyIncome"].astype(int)
+
+        # extract the target column and the features
+        test_x = test_data.drop(columns=['SeriousDlqin2yrs']).to_numpy()
+        test_x = np.append(test_x, np.ones((test_x.shape[0], 1)), axis=1)
+        test_y = test_prob.drop(columns=['Id']).to_numpy()  # drop the ID column
+        test_y = test_y.ravel() # flatten the target to 1D array
+        test_y = (test_y >= test_label_threshold).astype(int)
+        
+        return test_x, test_y
+    
+    # called in .reset() & .step()
+    def _get_obs(self):
+        if self.mode == 'train':
+            sample = self.train_x[self.samplePointer]
+        else:
+            sample = self.test_x[self.samplePointer]
+        
+        # response to the sample
+        if response_method == "GA":
+            observation = self.strategic_response_GA(sample, self.policy_weight)
+        elif response_method == "Close":
+            observation = self.strategic_response_Close(sample, self.policy_weight)
+        else:
+            raise ValueError(f"Unknown response method: {response_method}")
+        
+        return observation
+    
+    def _get_info(self):
+        # 当前样本的真值
+        if self.mode == 'train':
+            target = self.train_y[self.samplePointer]
+            max_len = len(self.train_x)
+        else:
+            target = self.test_y[self.samplePointer]
+            max_len = len(self.test_x)
+
+        # 计算下一个指针，检查是否越界
+        next_idx = self.samplePointer + 1
+        if next_idx < max_len:
+            # 合法时再生成 next_obs，否则直接 None
+            sample_seq = self.train_x if self.mode == 'train' else self.test_x
+            next_sample = sample_seq[next_idx]
+
+            if response_method == "GA":
+                next_obs = self.strategic_response_GA(next_sample, self.policy_weight)
+            elif response_method == "Close":
+                next_obs = self.strategic_response_Close(next_sample, self.policy_weight)
+            else:
+                # non-strategic 下直接 None
+                next_obs = None
+        else:
+            next_obs = None
+
+        return {
+            'true_label': target,
+            'next_obs': next_obs
+        }
+    
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        # We need the following line to seed self.np_random
+        super().reset(seed=seed)
+
+        # Reset the sample pointer to the beginning of the training data
+        self.samplePointer = 0
+
+        observation = self._get_obs()
+        info = self._get_info()
+
+        return observation, info
+
+    def step(self, action, previous_policy_weight=None):
+        # 1) 计算 reward（不动 samplePointer）
+        y_seq = self.train_y if self.mode == 'train' else self.test_y
+        label = y_seq[self.samplePointer]
+        if action == 0 and label == 0:
+            reward = +1
+        elif action == 0 and label == 1:
+            reward = -1
+        elif action == 1 and label == 0:
+            reward = -1
+        else:  # action == 1 and label == 1
+            reward = +1
+
+        # 2) 更新 policy weight（可选）
+        if previous_policy_weight is not None:
+            self.policy_weight = previous_policy_weight
+
+        # 3) 准备判断下一个样本
+        seq_x = self.train_x if self.mode == 'train' else self.test_x
+        max_len = len(seq_x)
+        next_idx = self.samplePointer + 1
+
+        terminated = next_idx >= max_len
+        truncated  = next_idx > self.maximum_episode_length
+
+        if not (terminated or truncated):
+            # 推进指针并取新 obs/info
+            self.samplePointer = next_idx
+            next_obs = self._get_obs()
+            info     = self._get_info()
+        else:
+            # 终止时也返回 true_label，避免 KeyError
+            next_obs = None
+            info     = self._get_info()
+
+        return next_obs, reward, terminated, truncated, info
+
+# Register the environment after the class definition
+gym.register(
+    id="creditScoring_v3",
+    entry_point="env.creditScoring_v3:creditScoring_v3"
+)
+
+if __name__ == "__main__":
+    env = creditScoring_v3()
+
