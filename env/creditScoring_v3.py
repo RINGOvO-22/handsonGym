@@ -14,10 +14,11 @@ Version 3: use the data processed by methods from "Performative Prediction"
 
 # hyperparameters
 test_label_threshold = 0.5  # threshold for the test label
-seed = 0
-strategic_response = False
-response_method = "Close"  # "GA" or "Close"
+seed = 2
+epsilon: float = 1 # cost parameter: v_i = 0.5 -> epsilon = 1 (different form in different papers)
 strat_features = np.array([1, 6, 8]) - 1
+strategic_response = True
+response_method = "Close"  # "GA" or "Close"
 
 class creditScoring_v3(gym.Env):
 
@@ -51,104 +52,118 @@ class creditScoring_v3(gym.Env):
         # parameter of the real cost function
         # Assume using a weighted quadratic cost function (same as in the "made practical" paper)
         self.cost_weight = np.full(shape=10, fill_value=0.5, dtype=np.float64)
-        self.policy_weight = policy_weight
+        
+        # 把 policy_weight 从 list 转成 ndarray
+        self.policy_weight = np.asarray(policy_weight, dtype=np.float64)
+
+        # test
+        self.trigger_once = False
     
-    def strategic_response_GA(self, 
-                          real_feature: np.ndarray, 
+    def strategic_response_GA(self,
+                          real_feature: np.ndarray,
                           policy_weight: np.ndarray,
-                          learning_rate=0.01,
-                          num_steps=50,
+                          learning_rate: float = 0.01,
+                          num_steps: int = 20,
+                          epsilon: float = 1.0,
                           strat_features: Optional[list] = None):
         """
-        Strategic response using gradient ascent on utility (-fz + cost), with plotting.
-        Only optimizes over `strat_features`; other features remain fixed.
+        Strategic response using gradient ascent to maximize f(z) - cost, updating only strat_features.
+        Utility: f(z) = sigmoid(theta^T z_full); cost = 1/(2*epsilon) * |z_s - x_s|^2.
+        Only strat_features are optimized; other features and bias stay fixed.
         """
+        # 初始化调用计数
         if not hasattr(self, "_response_call_count"):
             self._response_call_count = 0
         self._response_call_count += 1
 
+        # 如果不开启战略响应，直接返回原特征
         if not strategic_response:
             return real_feature
 
+        # 默认操纵所有非 bias 特征
+        n_features = len(policy_weight) - 1
         if strat_features is None:
-            strat_features = list(range(len(policy_weight) - 1))  # 默认操纵前10维（不含 bias）
+            strat_features = list(range(n_features))
+        # non-strategic 特征索引
+        ns_features = [i for i in range(n_features) if i not in strat_features]
 
+        # 选择设备并转换数据类型
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        x_orig = torch.tensor(real_feature.astype(np.float32), device=device)
+        theta_full = torch.tensor(policy_weight.astype(np.float32), device=device)
+        # 分离权重和 bias
+        theta = theta_full[:-1]    # 特征权重
+        bias = theta_full[-1]      # 偏置权重
 
-        real_feature = real_feature.astype(np.float32)
-        policy_weight = policy_weight.astype(np.float32)
-        cost_weight = self.cost_weight.astype(np.float32)
+        # strategic / non-strategic 部分
+        x_s  = x_orig[strat_features]
+        x_ns = x_orig[ns_features]
+        theta_s  = theta[strat_features]
+        theta_ns = theta[ns_features]
 
-        # 初始值与常量准备
-        x_orig = torch.tensor(real_feature, device=device)  # 原始 full 特征
-        x_s = x_orig[strat_features]                        # 可操纵特征
-        theta = torch.tensor(policy_weight[:-1], device=device)
-        theta_s = theta[strat_features]
-        bias = torch.tensor(policy_weight[-1], device=device)
-        cost_s = torch.tensor(cost_weight[strat_features], device=device)
+        # 成本系数
+        cost_s = torch.tensor(self.cost_weight[strat_features].astype(np.float32), device=device)
 
-        # z_s 是我们要优化的变量（只优化 strat_features）
+        # 预计算非-strategic 与 bias 的常量项
+        with torch.no_grad():
+            const_term = torch.dot(theta_ns, x_ns) + bias
+
+        # 需要优化的变量
         z_s = x_s.clone().detach().requires_grad_(True)
         optimizer = torch.optim.Adam([z_s], lr=learning_rate)
 
-        # 记录变化轨迹
-        record_z = self._response_call_count in [10, 20, 30, 40, 50]
-        z_history = []
+        # 是否记录轨迹
+        record = self._response_call_count in {10, 20, 30, 40, 50}
+        history = []
 
+        # 梯度上升迭代
         for _ in range(num_steps):
             optimizer.zero_grad()
-
-            # 构造完整输入 z_full（只在 strat_features 上替换）
-            z_full = x_orig.clone().detach()
-            z_full[strat_features] = z_s
-
-            # 计算 model 输出（linear + sigmoid）
-            logits = torch.dot(theta, z_full) + bias
+            logits = torch.dot(theta_s, z_s) + const_term
             fz = torch.sigmoid(logits)
-
-            # cost 只在 strat_features 上
-            cz = torch.sum(cost_s * (z_s - x_s) ** 2)
-
-            loss = -fz + cz
+            # 成本项带 epsilon 调节
+            cost = torch.sum(cost_s * (z_s - x_s) ** 2) / (2 * epsilon)
+            loss = -fz + cost
             loss.backward()
             optimizer.step()
 
+            # 投影到 [0,1]
             with torch.no_grad():
                 z_s.clamp_(0.0, 1.0)
 
-            if record_z:
-                z_history.append(z_s.detach().cpu().numpy().copy())
+            if record:
+                history.append(z_s.detach().cpu().numpy().copy())
 
-        # 可视化特征变化
-        if record_z:
+        # 可选可视化
+        if record and history:
             import matplotlib.pyplot as plt
-            z_array = np.array(z_history)  # shape: (steps, dim_strat)
-            plt.figure(figsize=(12, 6))
-            for i, f_idx in enumerate(strat_features):
-                plt.plot(range(num_steps), z_array[:, i], label=f'z[{f_idx}]')
-            plt.title(f'z Convergence Trend (Call #{self._response_call_count})')
-            plt.xlabel("Iteration Step")
-            plt.ylabel("z value")
-            plt.legend(loc='best', bbox_to_anchor=(1.05, 1))
-            plt.tight_layout()
+            arr = np.stack(history, axis=0)
+            plt.figure(figsize=(10, 5))
+            for i, f in enumerate(strat_features):
+                plt.plot(arr[:, i], label=f'z[{f}]')
+            plt.title(f"z Convergence (call #{self._response_call_count})")
+            plt.xlabel('Step')
+            plt.ylabel('z value')
+            plt.legend()
             plt.grid(True)
-            plt.savefig(f"./result/last_experiment/z_convergence_call_{self._response_call_count}.png")
+            plt.tight_layout()
+            plt.savefig(f"./result/last_experiment/z_conv_call_{self._response_call_count}.png")
             plt.close()
 
-        # 构造最终 manipulated 特征（只改 strat_features）
-        modified = np.copy(real_feature)
+        # 合成最终特征向量
+        modified = real_feature.copy()
         modified[strat_features] = z_s.detach().cpu().numpy()
-
         return modified
 
     def strategic_response_Close(self, 
                        real_feature: np.ndarray, 
                        policy_weight: np.ndarray,
-                       epsilon: float = 0.01,
-                       strat_features: Optional[list] = None):
+                       epsilon: float = epsilon, # v_i = 0.5 -> epsilon = 1 (different form in different papers)
+                       strat_features: Optional[list] = strat_features):
         """
         Best response function with linear utility and quadratic cost.
         Only manipulates features in strat_features.
+        Here we assume a identical cost pameter (epsilon). If they are different, the code needs to be modified.
         
         Parameters
         ----------
@@ -205,6 +220,9 @@ class creditScoring_v3(gym.Env):
             observation = self.strategic_response_GA(sample, self.policy_weight)
         elif response_method == "Close":
             observation = self.strategic_response_Close(sample, self.policy_weight)
+            if not self.trigger_once:
+                print(f"sample: {sample}, modified: {observation}")
+                self.trigger_once = True
         else:
             raise ValueError(f"Unknown response method: {response_method}")
         

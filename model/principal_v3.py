@@ -13,8 +13,11 @@ default_discount_factor = 0.99
 default_predict_label_threshold = 0.5
 default_batch_size = 32
 default_init_cost_pram = 2.0
-clip_val = 0.1 # for clipping the policy weight update
-td_clip = 1.0 # for clipping the TD error
+
+clipVal_td = 10.0 # for clipping the TD error
+clipVal_grad_log_pi = 10.0 # for clipping the gradient of log policy
+clipVal_policyWeight = 10.0 # for clipping the policy weight update
+
 np.random.seed(0)
 
 # a principal for the credit scoring v1 environment
@@ -56,7 +59,7 @@ class Principal_v3:
         # record training and testing process
         self.batch_update_count = 0
         self.training_error = []
-        self.training_accuracy = []
+        self.training_expected_acc_list = []
         self.training_acc_detail = []
         self.training_rewards = []
         self.training_policy_weights = []
@@ -103,7 +106,7 @@ class Principal_v3:
 
             td_target = reward + self.discount_factor * max_q_next
             td_error = td_target - q_value
-            td_error = np.clip(td_error, -td_clip, +td_clip)
+            td_error = np.clip(td_error, -clipVal_td, +clipVal_td)
 
             self.q_weights += self.lr_c * td_error * q_input
 
@@ -111,17 +114,20 @@ class Principal_v3:
             prob = 1 / (1 + np.exp(-logits))
             grad_log_pi = (action - prob) * obs
             # clip
-            grad_log_pi = np.clip(grad_log_pi, -1.0, 1.0)
+            grad_log_pi = np.clip(grad_log_pi, -clipVal_grad_log_pi, clipVal_grad_log_pi)
             weight_update = (self.lr_a * td_error * grad_log_pi) / self.buffer_size
-            weight_update = np.clip(weight_update, -clip_val, +clip_val)
+            weight_update = np.clip(weight_update, -clipVal_policyWeight, +clipVal_policyWeight)
 
             self.previous_policy_weight += weight_update
 
             self.training_single_policy_weight_update.append(weight_update)
 
-            # 记录该样本在当前策略下是否预测正确
-            pred_label = 1 if prob > default_predict_label_threshold else 0
-            accs.append(1.0 if pred_label == true_label else 0.0)
+            # 每步正确的概率(expected accuracy)
+            if true_label == 1:
+                correct_prob = prob
+            else:
+                correct_prob = 1 - prob
+            accs.append(correct_prob)
 
         self.buffer.clear()
         self.training_batch_acc.append(np.mean(accs))  # 记录当前 batch 平均 accuracy
@@ -144,18 +150,24 @@ class Principal_v3:
         if len(self.buffer) >= self.buffer_size:
             self.batch_update()
 
-        # 记录单步预测结果
-        prob, pred = self.get_action(obs)
+        # 记录单步结果
+        # 用确定性策略评估预测
+        prob, pred = self.get_action(obs, stochastic=True)
+        # 每步正确的概率
+        if true_label == 1:
+            correct_prob = prob
+        else:
+            correct_prob = 1 - prob
+        self.training_expected_acc_list.append(correct_prob)
+
         self.training_error.append(abs(prob - info['true_label']))
         self.training_rewards.append(reward)
         self.training_policy_weights.append(self.previous_policy_weight.copy())
-        accuracy = 1.0 if pred == int(info['true_label']) else 0.0
-        self.training_accuracy.append(accuracy)
         self.training_acc_detail.append({
             'predicted_prob': prob,
-            'predicted_label': action,
+            'predicted_label': pred,
             'true_label': info['true_label'],
-            'accuracy': accuracy
+            'expected_accuracy': correct_prob
         })
 
 
