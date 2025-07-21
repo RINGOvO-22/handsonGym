@@ -9,14 +9,20 @@ import csv
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
+from utils.data_prep_for2D import load_data
+import os
+import types
+import torch
+
 
 # hyperparameters
 max_training_time_steps = 100000
 max_testing_time_steps = 100000
-n_episodes = 100  # 30
+n_episodes = 30  # 30
 train_rolling_length = max_training_time_steps//200*n_episodes # for plotting moving averages
 test_rolling_length = max_testing_time_steps//200*n_episodes
 learning_rate = 1e-2
+seed = 0 # 0 or 2
 
 # mode = "normalized data + non-strategic response"
 
@@ -292,6 +298,102 @@ def plot_test_auc(agent):
     # plt.show()
     plt.close()
 
+# ---------- 2D Toy & Separator Visualization Helpers ----------
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+
+def visualise_data2D(X, y, save_path=None):
+    """
+    原始 2D 数据散点图
+    正样本蓝色，负样本橙色
+    """
+    plt.figure()
+    plt.scatter(X[y==1,0], X[y==1,1], label='Positive', alpha=0.7)
+    plt.scatter(X[y==0,0], X[y==0,1], label='Negative', alpha=0.7)
+    plt.legend()
+    plt.title("2D Toy Data")
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
+
+def visualise_separator2D(model, X, y, save_path=None):
+    """
+    在 2D 数据上绘制 model 的线性决策边界和数据点
+    要求 model.fc.weight, model.fc.bias 可用
+    """
+    w = model.fc.weight.detach().cpu().numpy()[0]  # [w0, w1]
+    b = model.fc.bias.item()
+    # 决策线: w0*x + w1*y + b = 0 -> y = -(w0*x + b)/w1
+    xs = np.linspace(X[:,0].min(), X[:,0].max(), 200)
+    ys = -(w[0]*xs + b) / (w[1] if abs(w[1])>1e-6 else 1e-6)
+    plt.figure()
+    plt.scatter(X[y==1,0], X[y==1,1], label='Positive', alpha=0.7)
+    plt.scatter(X[y==0,0], X[y==0,1], label='Negative', alpha=0.7)
+    plt.plot(xs, ys, 'k--', label='Boundary')
+    plt.legend()
+    plt.title("Decision Boundary")
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
+
+def visualize_2d_response(agent,
+                          data_path: str,
+                          seed: int = 0,
+                          result_dir: str = './result/last_experiment',
+                          use_train: bool = True):
+    """
+    一次性完成 2D toy 数据的原始样本、response 后样本、
+    以及在两者上叠加决策边界的可视化，并保存到 result_dir。
+
+    参数:
+      agent       -- 训练完毕的 Principal_v5 实例 (含 previous_policy_weight)
+      data_path   -- toy 数据 CSV 路径，供 load_data 加载
+      seed        -- 加载数据时的随机种子
+      result_dir  -- 保存图像的目标目录
+      use_train   -- True: 用 train_x/train_y；False: 用 test_x/test_y
+    """
+    os.makedirs(result_dir, exist_ok=True)
+
+    # 1. 加载 toy 数据
+    train_x, train_y, test_x, test_y = load_data(data_path, seed=seed)
+    X, y = (train_x, train_y) if use_train else (test_x, test_y)
+
+    # 2. 画原始点云
+    visualise_data2D(X, y,
+                    save_path=os.path.join(result_dir, 'toy_raw.png'))
+
+    # 3. 用最终 policy_weight 生成 response 样本
+    w = agent.previous_policy_weight
+    env = creditScoring_v5()
+    env.policy_weight = w
+    # 对每个样本调用 strategic_response_Close
+    X_strat = np.vstack([
+        env.strategic_response_Close(x, env.policy_weight)
+        for x in X
+    ])
+
+    # 4. 画 response 后的点云
+    visualise_data2D(X_strat, y,
+                    save_path=os.path.join(result_dir, 'toy_response.png'))
+
+    # 5. 构造一个能被 visualise_separator2D 识别的 “假模型”
+    model = types.SimpleNamespace()
+    model.fc    = types.SimpleNamespace()
+    # 假设 policy_weight 最后一维是 bias
+    model.fc.weight = torch.tensor(w[:-1].reshape(1, -1), dtype=torch.float32)
+    model.fc.bias   = torch.tensor([w[-1]],               dtype=torch.float32)
+
+    # 6. 在原始 & response 后样本上分别画决策边界
+    visualise_separator2D(model, X,      y,
+                         save_path=os.path.join(result_dir, 'toy_boundary.png'))
+    visualise_separator2D(model, X_strat, y,
+                         save_path=os.path.join(result_dir, 'toy_boundary_response.png'))
+    
 if __name__ == "__main__":
     # print("Current setting:", mode)
     agent, env = main()
@@ -305,3 +407,12 @@ if __name__ == "__main__":
     plot_policy_weights_export(agent)
     plot_test_auc(agent)
     plot_results_accAndRewards_export(agent, env, train_rolling_length, test_rolling_length)
+
+    visualize_2d_response(
+        agent,
+        data_path = "./data/generated_2D_data.csv",
+        seed      = 0,
+        result_dir= "./result/last_experiment",
+        use_train = True
+    )
+
