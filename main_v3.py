@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 # hyperparameters
 max_training_time_steps = 100000
 max_testing_time_steps = 100000
-n_episodes = 1 # 300
+n_episodes = 100 # 300
 train_rolling_length = max_training_time_steps//200*n_episodes # for plotting moving averages
 test_rolling_length = max_testing_time_steps//200*n_episodes
 learning_rate = 1e-2
@@ -228,6 +228,7 @@ def training_batch_acc(agent):
     plt.ylim(0.4, 0.8)
     plt.legend()
     plt.title("Cumulative Expected Accuracy over Batches")
+    plt.savefig('./result/last_experiment/batch_expected_acc.png')
     # plt.show()
     plt.close()
     print("Training batch expected accuracy plot saved to './result/last_experiment/batch_expected_acc.png'")
@@ -291,7 +292,7 @@ if __name__ == "__main__":
     agent, env = main()
     # training_weights_export(agent)
     training_accuracy_export(agent)
-    # testing_accuracy_export(agent)
+    testing_accuracy_export(agent)
     # training_weights_single_update(agent)
 
     # Plot the results

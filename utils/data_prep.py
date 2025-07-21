@@ -7,7 +7,7 @@ from sklearn import preprocessing
 from collections import Counter
 
 
-def load_data(file_loc):
+def load_data(file_loc, seed=None):
     """Load data from cvs file.
 
     Parameters
@@ -48,6 +48,8 @@ def load_data(file_loc):
     Y_balanced = Y_all[indices]
 
     # shuffle arrays
+    if seed is not None:
+        np.random.seed(seed)
     p = np.random.permutation(len(indices))
     X_full = X_balanced[p]
     Y_full = Y_balanced[p]

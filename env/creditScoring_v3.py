@@ -14,8 +14,9 @@ Version 3: use the data processed by methods from "Performative Prediction"
 
 # hyperparameters
 test_label_threshold = 0.5  # threshold for the test label
-seed = 2
-epsilon: float = 1 # cost parameter: v_i = 0.5 -> epsilon = 1 (different form in different papers)
+seed = 0 # 0 or 2
+# cost parameter: v_i = 0.5 -> epsilon = 1 (different form in different papers)
+epsilon: float = 1  # 0-10
 strat_features = np.array([1, 6, 8]) - 1
 strategic_response = True
 response_method = "Close"  # "GA" or "Close"
@@ -46,7 +47,7 @@ class creditScoring_v3(gym.Env):
 
         # Load the training and test data
         filePath = "./data/GiveMeSomeCredit/cs-training.csv"
-        self.train_x, self.train_y, rawData = load_train_data(filePath)
+        self.train_x, self.train_y, rawData = load_train_data(filePath, seed=seed)
         self.test_x, self.test_y = self.load_test_data()
 
         # parameter of the real cost function
