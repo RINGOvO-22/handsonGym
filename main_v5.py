@@ -298,7 +298,7 @@ def plot_test_auc(agent):
     # plt.show()
     plt.close()
 
-# ---------- 2D Toy & Separator Visualization Helpers ----------
+# ---------- 2D Toy Data Visualization tool functions ----------
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -319,7 +319,7 @@ def visualise_data2D(X, y, save_path=None):
     else:
         plt.show()
 
-def visualise_separator2D(model, X, y, save_path=None):
+def visualise_separator2D_old(model, X, y, save_path=None):
     """
     在 2D 数据上绘制 model 的线性决策边界和数据点
     要求 model.fc.weight, model.fc.bias 可用
@@ -341,6 +341,36 @@ def visualise_separator2D(model, X, y, save_path=None):
     else:
         plt.show()
 
+def visualize_separator2D(model, X, y, save_path=None):
+    if not X.size(1) == 2:
+        return
+
+    x_high, z_high = torch.max(X,0).values.tolist()
+    x_low, z_low = torch.min(X,0).values.tolist()
+
+    W = model.fc.weight[0]
+    b = model.fc.bias
+    
+    Xpos = X[y == 1]
+    Xneg = X[y == -1]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+
+    ax.set_xlim([x_low, x_high])
+    ax.set_ylim([z_low, z_high])
+
+    ax.scatter(Xpos[:, 0], Xpos[:, 1], marker='+', color='blue')
+    ax.scatter(Xneg[:, 0], Xneg[:, 1], marker='_', color='red')
+
+    range_arr = torch.arange(-5, 5)
+    xx = torch.meshgrid(range_arr)[0]
+    z = (-W[0] * xx - b) * 1. /W[1]
+    ax.plot(xx.detach().numpy(), z.detach().numpy(), alpha=1.0, color='green')
+
+    plt.savefig(save_path, dpi=150) if save_path else plt.show()
+
+# ---------- 2D Toy Data Response Visualization ----------
 def visualize_2d_response(agent,
                           data_path: str,
                           seed: int = 0,
@@ -389,9 +419,9 @@ def visualize_2d_response(agent,
     model.fc.bias   = torch.tensor([w[-1]],               dtype=torch.float32)
 
     # 6. 在原始 & response 后样本上分别画决策边界
-    visualise_separator2D(model, X,      y,
+    visualize_separator2D(model, X,      y,
                          save_path=os.path.join(result_dir, 'toy_boundary.png'))
-    visualise_separator2D(model, X_strat, y,
+    visualize_separator2D(model, X_strat, y,
                          save_path=os.path.join(result_dir, 'toy_boundary_response.png'))
     
 if __name__ == "__main__":
