@@ -159,42 +159,98 @@ class creditScoring_v5(gym.Env):
         modified = np.clip(modified, -10.0, 10.0)
         return modified
 
-    def strategic_response_Close(self, 
-                       real_feature: np.ndarray, 
-                       policy_weight: np.ndarray,
-                       epsilon: float = epsilon, # v_i = 0.5 -> epsilon = 1 (different form in different papers)
-                       strat_features: Optional[list] = strat_features):
+    def strategic_response_Close_naive(self, 
+                        real_feature: np.ndarray, 
+                        policy_weight: np.ndarray,
+                        epsilon: float = epsilon,  # manipulation strength
+                        strat_features: Optional[list] = strat_features):
         """
         Best response function with linear utility and quadratic cost.
         Only manipulates features in strat_features.
-        Here we assume a identical cost pameter (epsilon). If they are different, the code needs to be modified.
-        
-        Parameters
-        ----------
-        real_feature : np.ndarray
-            A 1D array representing the original features of the applicant
-        policy_weight : np.ndarray
-            A 1D array representing the classifier weights (last dimension is bias)
-        epsilon : float
-            Manipulation strength (1 / cost coefficient)
-        strat_features : list
-            Indices of features that can be manipulated
+        Moves only when misclassified & not too far from the boundary (like optimize_X).
         """
+
         if not strategic_response:
             return real_feature
 
         if strat_features is None:
             strat_features = list(range(len(policy_weight) - 1))  # exclude bias term
 
-        modified = np.copy(real_feature)
-        theta = policy_weight[:-1]  # exclude bias term
-        theta_strat = theta[strat_features]
+        # 1. 分离权重和偏置
+        theta = policy_weight[:-1]  # classifier weight
+        bias = policy_weight[-1]    # classifier bias
 
-        # update only strategy features: x'_i = x_i - ε * θ_i
+        # 2. 计算 margin = theta^T x + b
+        margin = np.dot(policy_weight, real_feature)
+
+        # 3. 模拟 optimize_X 中的判断逻辑
+        # 假设用户希望预测为正类 → r = 1
+        # 如果你需要 r = -1 的情况，请根据调用时修改
+        r = -1.0
+        directional_margin = r * margin
+        if directional_margin >= 0 or directional_margin < -2:
+            # 不需要操控（已经正确 or 距离太远）
+            return real_feature
+
+        # 4. 只修改 strategy features
+        modified = np.copy(real_feature)
+        theta_strat = theta[strat_features]
         modified[strat_features] += -epsilon * theta_strat
 
+        # 5. 限制范围
         modified = np.clip(modified, -10.0, 10.0)
+
         return modified
+
+    def strategic_response_Close(self, 
+                    real_feature: np.ndarray, 
+                    policy_weight: np.ndarray,
+                    safety_overshoot: float = 1e-2,  # small small safety overshoot
+                    strat_features: Optional[list] = None,
+                    strategic_response: bool = True,
+                    r: float = -1.0):  # 用户希望被预测为 0 → r = -1
+        """
+        Cost-sensitive best response:
+        Only manipulates features in strat_features,
+        and only moves if (1) misclassified and (2) cost is acceptable (≤2).
+
+        Logic mimics 'optimize_X'.
+        """
+        if not strategic_response:
+            return real_feature
+
+        if strat_features is None:
+            strat_features = list(range(len(policy_weight) - 1))  # exclude bias
+
+        # 1. 分离权重和偏置
+        theta = policy_weight[:-1]  # classifier weight
+        bias = policy_weight[-1]    # classifier bias
+
+        # 2. 当前点的 margin（带偏置）: theta^T x + b
+        margin = np.dot(theta, real_feature[:-1]) + bias
+
+        # 3. 归一化方向 & 距离
+        theta_norm = np.linalg.norm(theta)
+        directional_margin = r * margin
+        signed_dist = directional_margin / theta_norm  # signed distance
+
+        # 4. 判断是否需要操控
+        if signed_dist >= 0 or signed_dist < -2:
+            return real_feature  # 已被正确分类 or 离边界太远，放弃操控
+
+        # 5. 沿 theta 的方向移动，直到靠近边界（略过一点）
+        move_direction = -(1 + safety_overshoot) * r * signed_dist * theta / theta_norm
+
+        modified = np.copy(real_feature)
+        # 仅对 strat_features 应用 move_direction 中的对应分量
+        for i in strat_features:
+            modified[i] += move_direction[i]
+
+        # 6. 限制范围
+        modified = np.clip(modified, -10.0, 10.0)
+
+        return modified
+
 
     # def load_test_data(self):
     #     path = "data/ProcessedData/"
@@ -214,6 +270,7 @@ class creditScoring_v5(gym.Env):
     #     return test_x, test_y
     
     # called in .reset() & .step()
+
     def _get_obs(self):
         if self.mode == 'train':
             sample = self.train_x[self.samplePointer]

@@ -18,7 +18,7 @@ import torch
 # hyperparameters
 max_training_time_steps = 100000
 max_testing_time_steps = 100000
-n_episodes = 30  # 30
+n_episodes = 1  # 30
 train_rolling_length = max_training_time_steps//200*n_episodes # for plotting moving averages
 test_rolling_length = max_testing_time_steps//200*n_episodes
 learning_rate = 1e-2
@@ -309,8 +309,8 @@ def visualise_data2D(X, y, save_path=None):
     正样本蓝色，负样本橙色
     """
     plt.figure()
-    plt.scatter(X[y==1,0], X[y==1,1], label='Positive', alpha=0.7)
-    plt.scatter(X[y==0,0], X[y==0,1], label='Negative', alpha=0.7)
+    plt.scatter(X[y==1,0], X[y==1,1], label='Negative', alpha=0.7)
+    plt.scatter(X[y==0,0], X[y==0,1], label='Positive', alpha=0.7)
     plt.legend()
     plt.title("2D Toy Data")
     if save_path:
@@ -330,8 +330,8 @@ def visualise_separator2D_old(model, X, y, save_path=None):
     xs = np.linspace(X[:,0].min(), X[:,0].max(), 200)
     ys = -(w[0]*xs + b) / (w[1] if abs(w[1])>1e-6 else 1e-6)
     plt.figure()
-    plt.scatter(X[y==1,0], X[y==1,1], label='Positive', alpha=0.7)
-    plt.scatter(X[y==0,0], X[y==0,1], label='Negative', alpha=0.7)
+    plt.scatter(X[y==1,0], X[y==1,1], label='Negative', alpha=0.7)
+    plt.scatter(X[y==0,0], X[y==0,1], label='Positive', alpha=0.7)
     plt.plot(xs, ys, 'k--', label='Boundary')
     plt.legend()
     plt.title("Decision Boundary")
@@ -342,6 +342,13 @@ def visualise_separator2D_old(model, X, y, save_path=None):
         plt.show()
 
 def visualize_separator2D(model, X, y, save_path=None):
+    # 确保 X 是 torch.Tensor
+    if isinstance(X, np.ndarray):
+        X = torch.tensor(X, dtype=torch.float32)
+    
+    if X.shape[1] == 3:
+        X = X[:, :-1]  # 只保留前两维用于绘图
+
     if not X.size(1) == 2:
         return
 
@@ -351,8 +358,8 @@ def visualize_separator2D(model, X, y, save_path=None):
     W = model.fc.weight[0]
     b = model.fc.bias
     
-    Xpos = X[y == 1]
-    Xneg = X[y == -1]
+    Xpos = X[y == 0]
+    Xneg = X[y == 1]
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -364,11 +371,15 @@ def visualize_separator2D(model, X, y, save_path=None):
     ax.scatter(Xneg[:, 0], Xneg[:, 1], marker='_', color='red')
 
     range_arr = torch.arange(-5, 5)
-    xx = torch.meshgrid(range_arr)[0]
+    # xx = torch.meshgrid(range_arr)[0]
+    xx = torch.meshgrid(range_arr, indexing="ij")[0]
+
     z = (-W[0] * xx - b) * 1. /W[1]
     ax.plot(xx.detach().numpy(), z.detach().numpy(), alpha=1.0, color='green')
 
     plt.savefig(save_path, dpi=150) if save_path else plt.show()
+
+    print(f"Decision boundary visualized and saved to {save_path}" if save_path else "Decision boundary visualized.")
 
 # ---------- 2D Toy Data Response Visualization ----------
 def visualize_2d_response(agent,
@@ -423,6 +434,8 @@ def visualize_2d_response(agent,
                          save_path=os.path.join(result_dir, 'toy_boundary.png'))
     visualize_separator2D(model, X_strat, y,
                          save_path=os.path.join(result_dir, 'toy_boundary_response.png'))
+    
+    print(f"2D toy data visualization saved to {result_dir}")
     
 if __name__ == "__main__":
     # print("Current setting:", mode)
