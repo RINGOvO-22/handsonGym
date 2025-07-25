@@ -235,10 +235,15 @@ class creditScoring_v5(gym.Env):
         signed_dist = directional_margin / theta_norm  # signed distance
 
         # 4. 判断是否需要操控
-        if signed_dist >= 0 or signed_dist < -2:
-            return real_feature  # 已被正确分类 or 离边界太远，放弃操控
+        # 4.1 如果已经预测正确 or 距离太远，则不动
+        if signed_dist >= 0:
+            return real_feature
+        
+        # 4.2 模拟将移动的点（按 epsilon 更新）
+        # 显式计算 cost-benefit trade-off
+        # 如果带来收益小于代价，则不动
 
-        # 5. 沿 theta 的方向移动，直到靠近边界（略过一点）
+        # 沿 theta 的方向移动，直到靠近边界（略过一点）
         move_direction = -(1 + safety_overshoot) * r * signed_dist * theta / theta_norm
 
         modified = np.copy(real_feature)
@@ -246,8 +251,13 @@ class creditScoring_v5(gym.Env):
         for i in strat_features:
             modified[i] += move_direction[i]
 
-        # 6. 限制范围
-        modified = np.clip(modified, -10.0, 10.0)
+        benefit = 1.0  # 可调参数
+        cost = np.sum((modified - real_feature)**2)
+        if cost > benefit:
+            return real_feature
+        
+        # 5. 限制范围
+        modified = np.clip(modified, -5.0, 5.0)
 
         return modified
 
