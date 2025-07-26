@@ -251,8 +251,8 @@ class creditScoring_v5(gym.Env):
         for i in strat_features:
             modified[i] += move_direction[i]
 
-        benefit = 1.0  # 可调参数
-        cost = np.sum((modified - real_feature)**2)
+        benefit = 1.0  # hyperparameter
+        cost = np.sum((modified - real_feature)**2) / (2 * epsilon)
         if cost > benefit:
             return real_feature
         
