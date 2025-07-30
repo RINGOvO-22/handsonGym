@@ -17,7 +17,7 @@ Similarly, use the data processed by methods from "Performative Prediction"
 test_label_threshold = 0.5  # threshold for the test label
 seed = 0 # 0 or 2
 # cost parameter: v_i = 0.5 -> epsilon = 1 (different form in different papers)
-epsilon: float = 1  # 0-10
+epsilon: float = 0.5 # 0-10
 strat_features = np.array([0, 1])
 strategic_response = True
 response_method = "Close"  # "GA" or "Close"
@@ -66,7 +66,7 @@ class creditScoring_v5(gym.Env):
                           policy_weight: np.ndarray,
                           learning_rate: float = 0.01,
                           num_steps: int = 20,
-                          epsilon: float = 1.0,
+                          epsilon: float = epsilon,
                           strat_features: Optional[list] = None):
         """
         Strategic response using gradient ascent to maximize f(z) - cost, updating only strat_features.
@@ -100,6 +100,8 @@ class creditScoring_v5(gym.Env):
         # strategic / non-strategic 部分
         x_s  = x_orig[strat_features]
         x_ns = x_orig[ns_features]
+        # remove bias from x_ns
+        x_ns = x_ns[:-1]  # bias 是最后一个元素
         theta_s  = theta[strat_features]
         theta_ns = theta[ns_features]
 
@@ -129,9 +131,9 @@ class creditScoring_v5(gym.Env):
             loss.backward()
             optimizer.step()
 
-            # 投影到 [-10,10]
+            # 投影到 [-5,5]
             with torch.no_grad():
-                z_s.clamp_(-10.0, 10.0)
+                z_s.clamp_(-5.0, 5.0)
 
             if record:
                 history.append(z_s.detach().cpu().numpy().copy())
@@ -156,7 +158,7 @@ class creditScoring_v5(gym.Env):
         modified = real_feature.copy()
         modified[strat_features] = z_s.detach().cpu().numpy()
 
-        modified = np.clip(modified, -10.0, 10.0)
+        modified = np.clip(modified, -5.0, 5.0)
         return modified
 
     def strategic_response_Close_naive(self, 
@@ -245,16 +247,15 @@ class creditScoring_v5(gym.Env):
 
         # 沿 theta 的方向移动，直到靠近边界（略过一点）
         move_direction = -(1 + safety_overshoot) * r * signed_dist * theta / theta_norm
-
         modified = np.copy(real_feature)
         # 仅对 strat_features 应用 move_direction 中的对应分量
         for i in strat_features:
             modified[i] += move_direction[i]
-
         benefit = 1.0  # hyperparameter
         cost = np.sum((modified - real_feature)**2) / (2 * epsilon)
         if cost > benefit:
             return real_feature
+        # print(f"Moving from {real_feature} to {modified} with cost {cost} and benefit {benefit}")
         
         # 5. 限制范围
         modified = np.clip(modified, -5.0, 5.0)
